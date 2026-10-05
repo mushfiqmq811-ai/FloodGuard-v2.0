@@ -1,9 +1,14 @@
 FLOODGUARD BD — GLOFAS-ONLY
 
-1. Set CDS_API_KEY on Render.
-2. Deploy with the Build/Start commands in DEPLOY_RENDER.txt.
-3. Open the dashboard.
-4. FloodGuard requests one regional GloFAS operational forecast and maps it to the 20 configured zones.
-5. Open Research to inspect the source, coverage and ensemble forecast evidence.
+1. Upload this ZIP to your Git repository / Render service.
+2. Set the required Render environment variables from DEPLOY_RENDER.txt, especially:
+   - SECRET_KEY
+   - CDS_API_KEY
+3. Deploy with the Render configuration already included in render.yaml.
+4. Open the dashboard. It will request the newest available operational GloFAS issue date automatically.
+5. General Mode contains the public monitoring workflow.
+6. Research Mode contains provenance, ensemble evidence, replay and verification.
+7. If the newest GloFAS daily issue has not published yet, FloodGuard automatically tries recent prior issue dates. If a real snapshot already exists, it can be served from the authentic local cache rather than fabricated data.
 
-There is no synthetic fallback. If EWDS/GloFAS is unavailable, the affected dashboard state is explicitly DATA UNAVAILABLE.
+IMPORTANT:
+GloFAS provides forecast river discharge (m³/s), not Bangladesh gauge water level. FloodGuard's percentile signal is not an official Bangladesh flood-warning threshold.

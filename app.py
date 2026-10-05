@@ -11,28 +11,28 @@ app.secret_key = os.environ.get('SECRET_KEY', 'floodguard-dev-secret-change-me')
 
 # Operational data source: Copernicus CEMS / GloFAS only. No synthetic fallback.
 
-# Representative station set. Danger-level values are configuration references, not claims of current official measurements.
+# Representative GloFAS grid zones. Coordinates identify the nearest GloFAS river-grid cell; they are not Bangladesh gauge stations.
 STATIONS = {
- 'mymensingh': {'name':'Mymensingh — Old Brahmaputra','district':'Mymensingh','division':'Mymensingh','river':'Old Brahmaputra','station':'Mymensingh','danger':12.05,'lat':24.747,'lon':90.420,'seed':11,'base':7.1,'wave':0.16},
- 'jamalpur': {'name':'Jamalpur — Old Brahmaputra','district':'Jamalpur','division':'Mymensingh','river':'Old Brahmaputra','station':'Jamalpur','danger':16.55,'lat':24.937,'lon':89.937,'seed':12,'base':11.8,'wave':0.20},
- 'tangail': {'name':'Tangail — Dhaleshwari','district':'Tangail','division':'Dhaka','river':'Dhaleshwari','station':'Tangail','danger':7.95,'lat':24.251,'lon':89.916,'seed':13,'base':5.9,'wave':0.14},
- 'sylhet': {'name':'Sylhet — Surma','district':'Sylhet','division':'Sylhet','river':'Surma','station':'Sylhet','danger':10.50,'lat':24.895,'lon':91.869,'seed':14,'base':8.4,'wave':0.18},
- 'sunamganj': {'name':'Sunamganj — Surma','district':'Sunamganj','division':'Sylhet','river':'Surma','station':'Sunamganj','danger':7.20,'lat':25.066,'lon':91.395,'seed':15,'base':5.8,'wave':0.13},
- 'netrokona': {'name':'Netrokona — Kangsha','district':'Netrokona','division':'Mymensingh','river':'Kangsha','station':'Netrokona','danger':10.10,'lat':24.883,'lon':90.727,'seed':16,'base':7.5,'wave':0.17},
- 'kurigram': {'name':'Kurigram — Dharla','district':'Kurigram','division':'Rangpur','river':'Dharla','station':'Kurigram','danger':26.50,'lat':25.805,'lon':89.636,'seed':17,'base':24.7,'wave':0.28},
- 'gaibandha': {'name':'Gaibandha — Ghaghat','district':'Gaibandha','division':'Rangpur','river':'Ghaghat','station':'Gaibandha','danger':21.25,'lat':25.329,'lon':89.542,'seed':18,'base':17.4,'wave':0.21},
- 'nilphamari': {'name':'Nilphamari — Teesta','district':'Nilphamari','division':'Rangpur','river':'Teesta','station':'Nilphamari','danger':21.00,'lat':25.932,'lon':88.856,'seed':19,'base':18.1,'wave':0.22},
- 'sirajganj': {'name':'Sirajganj — Jamuna','district':'Sirajganj','division':'Rajshahi','river':'Jamuna','station':'Sirajganj','danger':13.35,'lat':24.453,'lon':89.700,'seed':20,'base':11.3,'wave':0.18},
- 'bogura': {'name':'Bogura — Karatoya','district':'Bogura','division':'Rajshahi','river':'Karatoya','station':'Bogura','danger':16.85,'lat':24.849,'lon':89.374,'seed':21,'base':13.7,'wave':0.15},
- 'rajshahi': {'name':'Rajshahi — Padma','district':'Rajshahi','division':'Rajshahi','river':'Padma','station':'Rajshahi','danger':18.50,'lat':24.374,'lon':88.604,'seed':22,'base':15.1,'wave':0.18},
- 'chapainawabganj': {'name':'Chapainawabganj — Mahananda','district':'Chapainawabganj','division':'Rajshahi','river':'Mahananda','station':'Chapainawabganj','danger':20.80,'lat':24.596,'lon':88.277,'seed':23,'base':17.6,'wave':0.17},
- 'faridpur': {'name':'Faridpur — Padma','district':'Faridpur','division':'Dhaka','river':'Padma','station':'Faridpur','danger':9.65,'lat':23.607,'lon':89.842,'seed':24,'base':8.0,'wave':0.13},
- 'madaripur': {'name':'Madaripur — Arial Khan','district':'Madaripur','division':'Dhaka','river':'Arial Khan','station':'Madaripur','danger':6.80,'lat':23.165,'lon':90.195,'seed':25,'base':5.7,'wave':0.11},
- 'barishal': {'name':'Barishal — Kirtankhola','district':'Barishal','division':'Barishal','river':'Kirtankhola','station':'Barishal','danger':2.95,'lat':22.701,'lon':90.353,'seed':26,'base':2.35,'wave':0.08},
- 'khulna': {'name':'Khulna — Rupsa','district':'Khulna','division':'Khulna','river':'Rupsa','station':'Khulna','danger':2.55,'lat':22.845,'lon':89.540,'seed':27,'base':1.95,'wave':0.06},
- 'jessore': {'name':'Jashore — Bhairab','district':'Jashore','division':'Khulna','river':'Bhairab','station':'Jashore','danger':4.80,'lat':23.167,'lon':89.216,'seed':28,'base':3.95,'wave':0.09},
- 'chattogram': {'name':'Chattogram — Karnaphuli','district':'Chattogram','division':'Chattogram','river':'Karnaphuli','station':'Chattogram','danger':5.35,'lat':22.356,'lon':91.783,'seed':29,'base':4.10,'wave':0.12},
- 'feni': {'name':'Feni — Muhuri','district':'Feni','division':'Chattogram','river':'Muhuri','station':'Feni','danger':4.35,'lat':23.015,'lon':91.396,'seed':30,'base':3.45,'wave':0.11},
+ 'mymensingh': {'name':'Mymensingh — Old Brahmaputra','district':'Mymensingh','division':'Mymensingh','river':'Old Brahmaputra','station':'Mymensingh','lat':24.747,'lon':90.420},
+ 'jamalpur': {'name':'Jamalpur — Old Brahmaputra','district':'Jamalpur','division':'Mymensingh','river':'Old Brahmaputra','station':'Jamalpur','lat':24.937,'lon':89.937},
+ 'tangail': {'name':'Tangail — Dhaleshwari','district':'Tangail','division':'Dhaka','river':'Dhaleshwari','station':'Tangail','lat':24.251,'lon':89.916},
+ 'sylhet': {'name':'Sylhet — Surma','district':'Sylhet','division':'Sylhet','river':'Surma','station':'Sylhet','lat':24.895,'lon':91.869},
+ 'sunamganj': {'name':'Sunamganj — Surma','district':'Sunamganj','division':'Sylhet','river':'Surma','station':'Sunamganj','lat':25.066,'lon':91.395},
+ 'netrokona': {'name':'Netrokona — Kangsha','district':'Netrokona','division':'Mymensingh','river':'Kangsha','station':'Netrokona','lat':24.883,'lon':90.727},
+ 'kurigram': {'name':'Kurigram — Dharla','district':'Kurigram','division':'Rangpur','river':'Dharla','station':'Kurigram','lat':25.805,'lon':89.636},
+ 'gaibandha': {'name':'Gaibandha — Ghaghat','district':'Gaibandha','division':'Rangpur','river':'Ghaghat','station':'Gaibandha','lat':25.329,'lon':89.542},
+ 'nilphamari': {'name':'Nilphamari — Teesta','district':'Nilphamari','division':'Rangpur','river':'Teesta','station':'Nilphamari','lat':25.932,'lon':88.856},
+ 'sirajganj': {'name':'Sirajganj — Jamuna','district':'Sirajganj','division':'Rajshahi','river':'Jamuna','station':'Sirajganj','lat':24.453,'lon':89.700},
+ 'bogura': {'name':'Bogura — Karatoya','district':'Bogura','division':'Rajshahi','river':'Karatoya','station':'Bogura','lat':24.849,'lon':89.374},
+ 'rajshahi': {'name':'Rajshahi — Padma','district':'Rajshahi','division':'Rajshahi','river':'Padma','station':'Rajshahi','lat':24.374,'lon':88.604},
+ 'chapainawabganj': {'name':'Chapainawabganj — Mahananda','district':'Chapainawabganj','division':'Rajshahi','river':'Mahananda','station':'Chapainawabganj','lat':24.596,'lon':88.277},
+ 'faridpur': {'name':'Faridpur — Padma','district':'Faridpur','division':'Dhaka','river':'Padma','station':'Faridpur','lat':23.607,'lon':89.842},
+ 'madaripur': {'name':'Madaripur — Arial Khan','district':'Madaripur','division':'Dhaka','river':'Arial Khan','station':'Madaripur','lat':23.165,'lon':90.195},
+ 'barishal': {'name':'Barishal — Kirtankhola','district':'Barishal','division':'Barishal','river':'Kirtankhola','station':'Barishal','lat':22.701,'lon':90.353},
+ 'khulna': {'name':'Khulna — Rupsa','district':'Khulna','division':'Khulna','river':'Rupsa','station':'Khulna','lat':22.845,'lon':89.540},
+ 'jessore': {'name':'Jashore — Bhairab','district':'Jashore','division':'Khulna','river':'Bhairab','station':'Jashore','lat':23.167,'lon':89.216},
+ 'chattogram': {'name':'Chattogram — Karnaphuli','district':'Chattogram','division':'Chattogram','river':'Karnaphuli','station':'Chattogram','lat':22.356,'lon':91.783},
+ 'feni': {'name':'Feni — Muhuri','district':'Feni','division':'Chattogram','river':'Muhuri','station':'Feni','lat':23.015,'lon':91.396},
 }
 
 # No embedded bulletin/snapshot fallback. Source data must be fetched authentically.
@@ -61,6 +61,7 @@ def init_db():
 init_db()
 
 # ---------- Notification engine ----------
+_ALERT_THREAD_STARTED=False
 def _smtp_configured():
     return bool(os.environ.get('SMTP_HOST') and os.environ.get('SMTP_USER') and os.environ.get('SMTP_PASS') and os.environ.get('EMAIL_FROM'))
 
@@ -118,7 +119,7 @@ def _set_alert_state(user_id, **fields):
 
 def _message_for(z,lang,kind):
     risk=z.get('risk'); district=z.get('district'); current=z.get('current'); trend=z.get('trend_m3s'); predicted=z.get('predicted')
-    if risk=='UNAVAILABLE' or current is None: return f'FloodGuard BD — GloFAS forecast data is currently unavailable for {district}. No artificial values are substituted.'
+    if risk=='UNAVAILABLE' or current is None: return f'FloodGuard BD — authentic GloFAS data is still being connected for {district}. No artificial hydrological value is substituted.'
     direction='rising' if (trend or 0)>0 else ('falling' if (trend or 0)<0 else 'stable')
     if lang=='bn':
         if kind=='welcome': return f"FloodGuard BD\nআপনার {district} zone-এর alert চালু হয়েছে। বর্তমান GloFAS relative signal: {risk_label_bn(risk)}।"
@@ -195,22 +196,39 @@ def _glofas_payload(force=False):
         GLOFAS_CACHE['error']=str(exc)
         return None
 
+_GLOFAS_THREAD=None
+_GLOFAS_FETCHING=False
+
+def _start_glofas_fetch(force=False):
+    global _GLOFAS_THREAD,_GLOFAS_FETCHING
+    if _GLOFAS_FETCHING and _GLOFAS_THREAD and _GLOFAS_THREAD.is_alive():
+        return False
+    def worker():
+        global _GLOFAS_FETCHING
+        _GLOFAS_FETCHING=True
+        try:_glofas_payload(force=force)
+        finally:_GLOFAS_FETCHING=False
+    _GLOFAS_THREAD=threading.Thread(target=worker,daemon=True,name='glofas-refresh')
+    _GLOFAS_THREAD.start()
+    return True
+
 def _series(key, force=False):
     payload=_glofas_payload(force=force)
     if not payload or not payload.get('stations',{}).get(key): return []
     return payload['stations'][key]
 
 def risk_for_discharge(series, value):
-    if value is None or not series: return 'UNAVAILABLE',None
-    vals=[float(x['discharge_m3s']) for x in series if x.get('discharge_m3s') is not None]
+    """Transparent percentile signal within the loaded GloFAS forecast window."""
+    if value is None or not series:return 'UNAVAILABLE',None
+    vals=sorted(float(x['discharge_m3s']) for x in series if x.get('discharge_m3s') is not None)
     if not vals:return 'UNAVAILABLE',None
-    # Relative high-flow signal: intentionally NOT a national flood-warning threshold.
-    lo=min(vals); hi=max(vals); span=max(hi-lo,1e-9); rel=(float(value)-lo)/span
-    if rel>=.90:r='SEVERE'
-    elif rel>=.75:r='FLOOD'
-    elif rel>=.55:r='WARNING'
+    below=sum(1 for x in vals if x<float(value)); equal=sum(1 for x in vals if x==float(value))
+    score=50.0 if len(vals)==1 else 100.0*(below+0.5*equal)/len(vals)
+    if score>=97.5:r='SEVERE'
+    elif score>=90:r='FLOOD'
+    elif score>=75:r='WARNING'
     else:r='NORMAL'
-    return r,round(max(0,min(99,rel*100)),1)
+    return r,round(score,1)
 
 def package_station(key, force=False):
     st=STATIONS[key]; series=_series(key,force=force); first=series[0] if series else None
@@ -221,32 +239,37 @@ def package_station(key, force=False):
     forecast=[]
     for x in series[:15]:
         rr,pp=risk_for_discharge(series,x.get('discharge_m3s'))
-        forecast.append({'date':(datetime.now().astimezone()+timedelta(days=int(x['lead_day']))).strftime('%Y-%m-%d'),'level':round(float(x['discharge_m3s']),1),'discharge_m3s':round(float(x['discharge_m3s']),1),'probability':pp,'risk':rr,'uncertainty':round((float(x['p90_m3s'])-float(x['p10_m3s']))/2,1) if x.get('p90_m3s') is not None else None,'source':'GloFAS operational forecast'})
-    status='LIVE GLOFAS' if current is not None else 'DATA UNAVAILABLE'
+        forecast.append({'date':((datetime.fromisoformat((GLOFAS_CACHE.get('payload') or {}).get('issue_date')) if (GLOFAS_CACHE.get('payload') or {}).get('issue_date') else datetime.now(timezone.utc)) + timedelta(days=int(x['lead_day']))).strftime('%Y-%m-%d'),'level':round(float(x['discharge_m3s']),1),'discharge_m3s':round(float(x['discharge_m3s']),1),'probability':pp,'risk':rr,'uncertainty':round((float(x['p90_m3s'])-float(x['p10_m3s']))/2,1) if x.get('p90_m3s') is not None else None,'source':'GloFAS operational forecast'})
+    status=('CACHED GLOFAS' if (GLOFAS_CACHE.get('payload') or {}).get('stale') else 'LIVE GLOFAS') if current is not None else 'CONNECTING TO GLOFAS'
     return {'id':key,'name':st['name'],'district':st['district'],'division':st['division'],'river':st['river'],'station':st['station'],
             'current':round(float(current),1) if current is not None else None,'predicted':forecast[0]['level'] if forecast else None,'probability':prob,
             'risk':risk,'danger':None,'reference':None,'lat':st['lat'],'lon':st['lon'],'trend_3h_cm':trend,'trend_m3s':trend,
             'live':current is not None,'simulation':False,'snapshot':False,'status':status,'source':'Copernicus CEMS / GloFAS','source_url':'https://ewds.climate.copernicus.eu/datasets/cems-glofas-forecast',
-            'observed_at':None,'fetched_at':(GLOFAS_CACHE.get('payload') or {}).get('fetched_at'),'forecast15':forecast,'day15':forecast[-1]['level'] if forecast else None,'day15risk':forecast[-1]['risk'] if forecast else 'UNAVAILABLE',
-            'history_points':0,'model_ready':True,'unit':'m3/s','signal_type':'Relative GloFAS high-flow signal'}
+            'observed_at':None,'fetched_at':(GLOFAS_CACHE.get('payload') or {}).get('fetched_at'),'issue_date':(GLOFAS_CACHE.get('payload') or {}).get('issue_date'),'stale':bool((GLOFAS_CACHE.get('payload') or {}).get('stale')),'forecast15':forecast,'day15':forecast[-1]['level'] if forecast else None,'day15risk':forecast[-1]['risk'] if forecast else 'UNAVAILABLE',
+            'history_points':0,'model_ready':True,'unit':'m3/s','signal_type':'Relative GloFAS forecast-window percentile signal'}
 
 def build_dashboard(key):
     if key not in STATIONS:key='mymensingh'
     z=package_station(key)
-    return {'station':z,'current':z['current'],'predicted':z['predicted'],'probability':z['probability'],'risk':z['risk'],'trend_per_3h':z['trend_m3s'],'forecast15':z['forecast15'],'history':[],'advice':advice(z['risk']),'simple':make_simple_summary(z),'live_connected':z['live'],'model':{'ready':True,'model_name':'GloFAS relative high-flow signal'}}
+    return {'station':z,'current':z['current'],'predicted':z['predicted'],'probability':z['probability'],'risk':z['risk'],'trend_per_3h':z['trend_m3s'],'forecast15':z['forecast15'],'history':[],'advice':advice(z['risk']),'simple':make_simple_summary(z),'live_connected':z['live'],'model':{'ready':True,'model_name':'Copernicus GloFAS / LISFLOOD operational ensemble'}}
 
 def advice(risk):
     if risk=='UNAVAILABLE': return ['GloFAS forecast data is currently unavailable for this zone.','FloodGuard will not substitute simulated values.','Follow official Bangladesh flood authorities for decisions.']
     return {'NORMAL':['Monitor the GloFAS outlook and local conditions.','Keep phones and power banks charged.','Know the nearest safe high ground or shelter.'],'WARNING':['Check the next GloFAS updates and local-authority information regularly.','Prepare water, dry food, medicines and important documents.','Plan an evacuation route if local conditions worsen.'],'FLOOD':['Treat the high-flow signal seriously and monitor official warnings.','Move valuables, documents, livestock and essentials higher.','Avoid unnecessary travel near rivers and fast-moving water.'],'SEVERE':['Treat the forecast as a strong high-flow signal and check official warnings immediately.','Follow local-authority emergency instructions.','Move to higher ground or a designated shelter when instructed.']}[risk]
 
 def make_simple_summary(z):
-    if z['current'] is None: return {'headline':'GloFAS forecast data is currently unavailable for this zone.','sub':'FloodGuard will not substitute simulated or synthetic values.'}
+    if z['current'] is None: return {'headline':f"Connecting to authentic GloFAS for {z['district']}.",'sub':'FloodGuard never substitutes a synthetic hydrological value.'}
     direction='rising' if (z['trend_m3s'] or 0)>0 else ('falling' if (z['trend_m3s'] or 0)<0 else 'steady')
-    if z['risk']=='SEVERE': headline=f"Very high relative river-flow signal near {z['district']}. The GloFAS forecast is {direction}."
-    elif z['risk']=='FLOOD': headline=f"High relative river-flow signal near {z['district']}. The GloFAS forecast is {direction}."
-    elif z['risk']=='WARNING': headline=f"River-flow signal is elevated near {z['district']}. The GloFAS forecast is {direction}."
-    else: headline=f"No elevated relative high-flow signal is detected near {z['district']} in the current GloFAS forecast."
-    return {'headline':headline,'sub':f"Forecast discharge: {z['current']:.1f} m³/s. This is a GloFAS discharge signal, not an observed BWDB water level."}
+    if z['risk']=='SEVERE': headline=f"Very high relative forecast signal near {z['district']}. The GloFAS forecast is {direction}."
+    elif z['risk']=='FLOOD': headline=f"High relative forecast signal near {z['district']}. The GloFAS forecast is {direction}."
+    elif z['risk']=='WARNING': headline=f"Forecast signal is elevated near {z['district']}. The GloFAS forecast is {direction}."
+    else: headline=f"No elevated relative forecast signal is detected near {z['district']} in the current GloFAS forecast."
+    return {'headline':headline,'sub':f"Forecast discharge: {z['current']:.1f} m³/s. This is a GloFAS forecast discharge signal, not an observed Bangladesh gauge stage."}
+
+@app.get('/healthz')
+def healthz():
+    payload=GLOFAS_CACHE.get('payload')
+    return jsonify({'ok':True,'service':'FloodGuard BD','glofas_connected':bool(payload),'glofas_issue_date':payload.get('issue_date') if payload else None,'glofas_fetched_at':payload.get('fetched_at') if payload else None,'background_alerts':bool(_ALERT_THREAD_STARTED)})
 
 @app.route('/')
 def index():
@@ -265,19 +288,20 @@ def national():
     return jsonify({'zones':zones,'counts':counts,'stations':len(zones),'live_stations':sum(z['live'] for z in zones)})
 @app.route('/api/live-refresh')
 def live_refresh():
-    snap=_glofas_payload(force=request.args.get('force')=='1')
-    return jsonify({'started':bool(snap),'state':'ready' if snap else 'error','connected':bool(snap),'fetched_at':snap.get('fetched_at') if snap else None,'error':GLOFAS_CACHE.get('error')})
+    started=_start_glofas_fetch(force=request.args.get('force')=='1')
+    snap=GLOFAS_CACHE.get('payload')
+    return jsonify({'started':started,'state':'fetching' if _GLOFAS_FETCHING else ('ready' if snap else 'idle'),'connected':bool(snap),'fetched_at':snap.get('fetched_at') if snap else None,'error':GLOFAS_CACHE.get('error')})
 @app.route('/api/live-status')
 def live_status():
-    snap=GLOFAS_CACHE.get('payload'); return jsonify({'connected':bool(snap),'state':'ready' if snap else 'idle','source':'Copernicus CEMS / GloFAS','fetched_at':snap.get('fetched_at') if snap else None,'error':GLOFAS_CACHE.get('error')})
+    snap=GLOFAS_CACHE.get('payload'); return jsonify({'connected':bool(snap),'state':'fetching' if _GLOFAS_FETCHING else ('ready' if snap else ('error' if GLOFAS_CACHE.get('error') else 'idle')),'source':'Copernicus CEMS / GloFAS','fetched_at':snap.get('fetched_at') if snap else None,'issue_date':snap.get('issue_date') if snap else None,'error':GLOFAS_CACHE.get('error')})
 @app.route('/api/analytics')
 def analytics():
     zones=[package_station(k) for k in STATIONS]; valid=[z for z in zones if z.get('current') is not None]
     rising=sorted(valid,key=lambda z:z.get('trend_m3s') if z.get('trend_m3s') is not None else -999,reverse=True)
-    return jsonify({'counts':{r:sum(z['risk']==r for z in zones) for r in ['NORMAL','WARNING','FLOOD','SEVERE']},'avg_discharge_m3s':round(statistics.mean(z['current'] for z in valid),1) if valid else None,'rising':rising[:6],'closest':sorted(valid,key=lambda z:z.get('probability') or 0,reverse=True)[:6]})
+    return jsonify({'counts':{r:sum(z['risk']==r for z in zones) for r in ['NORMAL','WARNING','FLOOD','SEVERE']},'avg_discharge_m3s':round(statistics.mean(z['current'] for z in valid),1) if valid else None,'rising':rising[:6],'highest_signal':sorted(valid,key=lambda z:z.get('probability') or 0,reverse=True)[:6]})
 
 @app.get('/api/model-status')
-def api_model_status(): return jsonify({'ready':True,'model_name':'GloFAS relative high-flow signal','training_source':'Copernicus GloFAS operational forecast','synthetic_data_used':False,'note':'This is a relative forecast signal, not an official flood warning model.'})
+def api_model_status(): return jsonify({'ready':True,'model_name':'Copernicus GloFAS / LISFLOOD operational ensemble','training_source':'ECMWF meteorological ensemble + LISFLOOD hydrological model','synthetic_data_used':False,'note':'FloodGuard adds a transparent forecast-window percentile decision layer; it is not an official Bangladesh warning model.'})
 
 @app.get('/api/data-provenance')
 def data_provenance(): return jsonify(source_status())
@@ -285,7 +309,7 @@ def data_provenance(): return jsonify(source_status())
 @app.get('/api/research/summary')
 def research_summary():
     zones=[package_station(k) for k in STATIONS]
-    return jsonify({'ok':True,'architecture':'GloFAS-only','source':source_status(),'zones':len(zones),'live_zones':sum(z['live'] for z in zones),'risk_definition':'Relative position within each station 15-day GloFAS forecast; not an official flood threshold.','forecast_horizon_days':15,'ensemble_enabled':True,'historical_validation':'NOT_YET_IMPLEMENTED','synthetic_fallback':False})
+    return jsonify({'ok':True,'architecture':'General Mode + Research Mode · GloFAS-only','source':source_status(),'zones':len(zones),'live_zones':sum(z['live'] for z in zones),'risk_definition':'Forecast-window percentile signal derived from authentic GloFAS discharge. It is not an official Bangladesh flood-warning threshold.','forecast_horizon_days':15,'ensemble_enabled':any(any(x.get('ensemble') for x in (GLOFAS_CACHE.get('payload') or {}).get('stations',{}).get(k,[])) for k in STATIONS),'historical_replay':'AVAILABLE_ON_DEMAND','verification':'GloFAS forecast vs GloFAS historical modelled discharge; not independent gauge validation','synthetic_fallback':False})
 
 @app.get('/api/research/glofas/<station_id>')
 def research_glofas(station_id):
@@ -297,12 +321,30 @@ def research_glofas(station_id):
 def research_replay():
     data=request.get_json(silent=True) or {}; station_id=data.get('station_id','feni'); issue_date=(data.get('issue_date') or '').strip()
     if station_id not in STATIONS or not issue_date:return jsonify({'ok':False,'error':'station_id and issue_date are required'}),400
-    try:return jsonify(fetch_historical_forecast(STATIONS[station_id],issue_date))
+    try:return jsonify(fetch_historical_forecast(STATIONS[station_id],issue_date,lead_days=15))
+    except Exception as exc:return jsonify({'ok':False,'error':str(exc),'station':station_id,'issue_date':issue_date}),502
+
+@app.post('/api/research/verify')
+def research_verify():
+    data=request.get_json(silent=True) or {}; station_id=data.get('station_id','feni'); issue_date=(data.get('issue_date') or '').strip()
+    if station_id not in STATIONS or not issue_date:return jsonify({'ok':False,'error':'station_id and issue_date are required'}),400
+    try:
+        from real_data import fetch_historical_series
+        replay=fetch_historical_forecast(STATIONS[station_id],issue_date,lead_days=15); fc=replay.get('forecast',[])
+        issue=datetime.fromisoformat(issue_date).date(); valid_days=[issue+timedelta(days=i) for i in range(1,len(fc)+1)]
+        hist=fetch_historical_series(STATIONS[station_id],valid_days); by_date={r['date']:r['discharge_m3s'] for r in hist}; pairs=[]
+        for row in fc:
+            d=(issue+timedelta(days=int(row['lead_day']))).isoformat()
+            if d in by_date and row.get('discharge_m3s') is not None:pairs.append((int(row['lead_day']),float(row['discharge_m3s']),float(by_date[d]),d))
+        if not pairs:return jsonify({'ok':False,'error':'Historical GloFAS target values were not returned for the replay window.'}),502
+        errors=[a-b for _,a,b,_ in pairs]; mae=sum(abs(x) for x in errors)/len(errors); rmse=(sum(x*x for x in errors)/len(errors))**0.5; bias=sum(errors)/len(errors)
+        ma=sum(a for _,a,_,_ in pairs)/len(pairs); mb=sum(b for _,_,b,_ in pairs)/len(pairs); cov=sum((a-ma)*(b-mb) for _,a,b,_ in pairs); va=sum((a-ma)**2 for _,a,_,_ in pairs); vb=sum((b-mb)**2 for _,_,b,_ in pairs); corr=cov/(va*vb)**0.5 if va>0 and vb>0 else None
+        return jsonify({'ok':True,'station':station_id,'issue_date':issue_date,'target':'GloFAS v4.0 historical modelled discharge','independent_gauge_validation':False,'n':len(pairs),'mae_m3s':round(mae,2),'rmse_m3s':round(rmse,2),'bias_m3s':round(bias,2),'correlation':round(corr,3) if corr is not None else None,'rows':[{'lead_day':d,'date':dt,'forecast_m3s':round(a,2),'historical_m3s':round(b,2),'error_m3s':round(a-b,2)} for d,a,b,dt in pairs]})
     except Exception as exc:return jsonify({'ok':False,'error':str(exc),'station':station_id,'issue_date':issue_date}),502
 
 @app.get('/api/research/validation-status')
 def validation_status():
-    return jsonify({'status':'GLOFAS_ONLY_BASELINE','synthetic_data_used':False,'real_observation_validation':'NOT_AVAILABLE_IN_GLOFAS_ONLY_MODE','next_stage':'Historical GloFAS forecast replay / reforecast skill evaluation'})
+    return jsonify({'status':'READY_FOR_MODELLED-TARGET VERIFICATION','synthetic_data_used':False,'real_observation_validation':'NOT_AVAILABLE_WITH_GLOFAS-ONLY INPUTS','available_verification':'Operational GloFAS forecast replay vs GloFAS v4.0 historical modelled discharge','independent_ground_truth':False,'note':'This verification measures consistency against a GloFAS historical modelled target; it must not be presented as gauge-based flood-warning accuracy.'})
 
 @app.get('/api/glofas/<station_id>')
 def glofas_station(station_id):
@@ -457,7 +499,9 @@ def cyclones():
 def report():
     zones=[package_station(k) for k in STATIONS]; now=datetime.now().astimezone().strftime('%d %b %Y, %I:%M:%S %p')
     lines=['FLOODGUARD BD — FLOOD SITUATION REPORT','',f'Generated: {now}','Only authentic Copernicus GloFAS forecast data and derived relative high-flow signals are reported.','']
-    for z in zones: lines.append(f"{z['name']} | {z['current']:.1f} m3/s | relative signal {z['risk']} | {z['status']}")
+    for z in zones:
+        value='—' if z['current'] is None else f"{z['current']:.1f}"
+        lines.append(f"{z['name']} | {value} m3/s | forecast signal {z['risk']} | {z['status']}")
     return Response('\n'.join(lines),mimetype='text/plain',headers={'Content-Disposition':'attachment; filename="FloodGuard_BD_Situation_Report.txt"'})
 
 @app.post('/api/copilot')
@@ -468,10 +512,14 @@ def copilot():
     if not question: return jsonify({'ok':False,'error':'Question is required.'}),400
     if station not in STATIONS: station='mymensingh'
     key=os.environ.get('GEMINI_API_KEY','').strip()
-    if not key: return jsonify({'ok':False,'error':'GEMINI_API_KEY is not configured.'}),503
     z=package_station(station)
     if not z.get('live'):
-        return jsonify({'ok':False,'error':'Authentic GloFAS forecast data is unavailable for this zone; Copilot will not invent context.'}),503
+        return jsonify({'ok':False,'error':'Authentic GloFAS forecast data is still loading for this zone. Please retry after the feed connects.'}),503
+    if not key:
+        direction='rising' if (z.get('trend_m3s') or 0)>0 else ('falling' if (z.get('trend_m3s') or 0)<0 else 'stable')
+        f3=(z.get('forecast15') or [])[2] if len(z.get('forecast15') or [])>=3 else None
+        answer=(f"Current GloFAS median forecast discharge for {z['district']} is {z['current']:.1f} m³/s. The Day-2 change is {(z.get('trend_m3s') or 0):+.1f} m³/s, so the forecast is {direction}. FloodGuard's relative forecast signal is {z['risk']} with a {z.get('probability',0):.1f}% percentile score. " + (f"Around Day 3 the median forecast is {f3['level']:.1f} m³/s. " if f3 else '') + "This is forecast discharge, not observed Bangladesh gauge stage. Follow official local warnings for emergency decisions.")
+        return jsonify({'ok':True,'answer':answer,'model':'FloodGuard grounded explainer','grounded_in':'Copernicus GloFAS data'})
     prompt=("You are FloodGuard BD Copilot. Use ONLY the supplied FloodGuard data. "
             "Do not invent measurements, forecasts, warnings, authorities or sources. "
             "Clearly distinguish GloFAS forecast discharge from any derived relative signal. "
@@ -595,13 +643,23 @@ def enable_alerts():
         _set_alert_state(uid,last_risk=z['risk'],welcome_sent=1)
     return jsonify({'ok':bool(result.get('sent')),'message':'Welcome alert sent immediately.' if result.get('sent') else 'Could not send welcome alert.','details':result})
 
+@app.get('/api/alerts/feed')
+def alerts_feed():
+    uid=session.get('uid')
+    if not uid:return jsonify({'ok':False,'error':'Login required.'}),401
+    con=db(); rows=con.execute('SELECT event_type,event_key,sent_at FROM alert_events WHERE user_id=? ORDER BY id DESC LIMIT 30',(uid,)).fetchall(); state=con.execute('SELECT * FROM alert_state WHERE user_id=?',(uid,)).fetchone(); con.close()
+    return jsonify({'ok':True,'events':[dict(r) for r in rows],'state':dict(state) if state else None})
+
 @app.post('/api/alerts/dispatch')
 def alerts_dispatch():
     # Manual/cron-safe trigger for notification processing.
     return jsonify({'ok':True,'results':dispatch_alerts()})
 
 
+if os.environ.get('ENABLE_BACKGROUND_ALERTS','true').lower() == 'true':
+    start_alert_loop()
+_start_glofas_fetch(False)
+
 if __name__=='__main__':
-    trigger_live_refresh(False)
     start_alert_loop()
     port=int(os.environ.get('PORT','5081')); app.run(host='0.0.0.0',port=port,debug=False)

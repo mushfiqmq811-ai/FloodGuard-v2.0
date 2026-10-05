@@ -1,28 +1,41 @@
 # FloodGuard BD — GloFAS-Only Production Build
 
-This build keeps the existing FloodGuard BD visual language while switching the operational data path to one authentic source: Copernicus CEMS / GloFAS. BWDB scraping, synthetic fallback data and fake observed water levels are removed from the production path.
+FloodGuard BD keeps the existing visual language and uses **Copernicus CEMS / GloFAS** as its only operational hydrological source. BWDB scraping, synthetic hydrological fallback and fake observed water levels are not part of the production data path.
 
-## Data architecture
-- **Live/operational source:** Copernicus CEMS / GloFAS via `https://ewds.climate.copernicus.eu/api`
-- **Dataset:** `cems-glofas-forecast`
-- **Variable:** `river_discharge_in_the_last_24_hours`
-- **Unit:** m³/s
-- **Horizon:** 15 days shown in FloodGuard; the source request retrieves 30 days.
-- **Ensemble:** perturbed forecasts are requested so P10/P50/P90 information can be exposed when returned by EWDS.
-- **Historical replay:** the Research endpoint can request the actual operational GloFAS forecast issued on a supplied historical date.
+## Operational data
+- Dataset: `cems-glofas-forecast`
+- Variable: `river_discharge_in_the_last_24_hours`
+- Unit: m³/s
+- Operational model: LISFLOOD
+- FloodGuard display horizon: 15 days
+- Ensemble evidence: P10 / P50 / P90 when returned by EWDS
+- Automatic issue-date fallback: newest available daily issue, stepping back several days when publication lags
+- Persistent real snapshot: the last successfully fetched authentic dataset is retained locally for process restarts
 
-## Risk definition
-FloodGuard does not invent a national danger-level threshold. The current release derives a **relative high-flow signal** from each zone's 15-day GloFAS forecast window. This is transparent experimental decision support, not an official flood warning.
+## General Mode
+Public-facing monitoring includes:
+- Home / current situation
+- 20 strategic GloFAS forecast zones
+- Bangladesh map
+- 15-day forecast cards, table and charts
+- Forecast-window signal ranking and national distribution
+- Weather, earthquake and cyclone hazard feeds
+- GloFAS scenario lab
+- Grounded FloodGuard Copilot
+- Account, saved zone and in-app alert history
+- Email and browser push notification channels when their server credentials are configured
 
-## Research mode
-The dashboard includes a Research page with source provenance, live-zone coverage, scientific status, ensemble evidence and a per-zone GloFAS forecast table.
+## Research Mode
+Research is a separate technical page rather than a second fake data pipeline. It exposes:
+- Source provenance
+- GloFAS/LISFLOOD architecture
+- Ensemble P10/P50/P90 evidence
+- Operational forecast replay by issue date
+- Forecast-vs-GloFAS-historical verification with MAE, RMSE, bias and correlation
+- Explicit scientific limitation: the verification target is a GloFAS modelled historical product, not independent Bangladesh gauge truth
+
+## Signal definition
+FloodGuard does **not** invent a Bangladesh danger-stage threshold from GloFAS discharge. The public signal is a transparent percentile score within each zone's loaded 15-day forecast window. It is experimental decision support, not an official flood warning.
 
 ## Deployment
-Set the environment variables in `DEPLOY_RENDER.txt`, then deploy with:
-
-```bash
-pip install -r requirements.txt
-gunicorn --bind 0.0.0.0:$PORT app:app
-```
-
-No training command is required at Render build time.
+See `DEPLOY_RENDER.txt` for the exact Render configuration. The required hydrological secret is `CDS_API_KEY`. Gemini is optional because FloodGuard includes a grounded local explainer fallback; SMTP and VAPID are optional notification channels.
