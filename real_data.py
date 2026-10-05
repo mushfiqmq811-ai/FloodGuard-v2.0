@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import threading
 import time
@@ -135,72 +136,122 @@ def _coord_name(ds, candidates):
     return None
 
 
-def _coords(ds):
-    lat = _coord_name(ds, ("latitude", "lat"))
-    lon = _coord_name(ds, ("longitude", "lon"))
-    var = next((v for v in ds.data_vars if "discharge" in v.lower() or v.lower() == "dis24"), None)
-    step = _coord_name(ds, ("leadtime_hour", "step", "leadtime"))
-    number = _coord_name(ds, ("number", "realization", "ensemble", "member"))
-    time_name = _coord_name(ds, ("time", "forecast_reference_time"))
-    if not lat or not lon or not var:
-        raise RuntimeError(f"Unsupported GloFAS NetCDF structure: coords={list(ds.coords)}, vars={list(ds.data_vars)}")
-    return lat, lon, var, step, number, time_name
-
-
 def _to_float(v):
     try:
-        x = float(v)
+        x=float(v)
         return x if x == x and abs(x) != float("inf") else None
     except Exception:
         return None
 
 
-def _series_for(ds, station):
+def _coords(ds):
+    """Resolve GloFAS NetCDF coordinates across current/legacy NetCDF layouts."""
+    lat = _coord_name(ds, ("latitude", "lat"))
+    lon = _coord_name(ds, ("longitude", "lon"))
+    var = next((v for v in ds.data_vars if v.lower() in ("dis24", "river_discharge_in_the_last_24_hours") or "discharge" in v.lower()), None)
+    step = _coord_name(ds, ("leadtime_hour", "leadtime", "step", "forecast_period"))
+    number = _coord_name(ds, ("number", "realization", "ensemble", "member"))
+    time_name = _coord_name(ds, ("forecast_reference_time", "time", "valid_time"))
+    if not lat or not lon or not var:
+        raise RuntimeError(f"Unsupported GloFAS NetCDF structure: coords={list(ds.coords)}, vars={list(ds.data_vars)}")
+    return lat, lon, var, step, number, time_name
+
+
+def _lead_sort_value(v):
+    try:
+        if hasattr(v, "astype"):
+            # numpy timedelta64 -> hours
+            x = v.astype("timedelta64[h]").astype("int64")
+            return float(x)
+    except Exception:
+        pass
+    try:
+        return float(v)
+    except Exception:
+        text=str(v).lower()
+        m=re.search(r"([0-9]+(?:\\.[0-9]+)?)", text)
+        return float(m.group(1)) if m else 0.0
+
+
+def _series_for(ds, station, max_days=None):
+    """Extract exactly one nearest GloFAS river-grid forecast series.
+
+    Handles the common GloFAS layouts where a one-element forecast-reference
+    time dimension sits beside a lead-time/step dimension. Never flattens an
+    unresolved time/member axis into fake sequential days.
+    """
     lat, lon, var, step, number, time_name = _coords(ds)
     da = ds[var].sel({lat: float(station["lat"]), lon: float(station["lon"])}, method="nearest")
+    limit = int(max_days or FORECAST_DAYS)
 
-    # Collapse any unexpected spatial dimensions while retaining lead/member axes.
-    keep = {d for d in (step, number, time_name) if d and d in da.dims}
+    # Remove singleton reference-time dimensions first. A reference time with
+    # more than one value is not a valid single forecast issue for this parser.
     for d in list(da.dims):
-        if d not in keep:
-            da = da.mean(d, skipna=True)
+        if d == time_name and da.sizes.get(d, 1) == 1:
+            da = da.isel({d: 0}, drop=True)
+    # Drop other singleton dimensions safely.
+    for d in list(da.dims):
+        if da.sizes.get(d, 1) == 1 and d not in (step, number):
+            da = da.isel({d: 0}, drop=True)
 
-    axis = step or time_name
-    if axis and axis in da.dims:
-        try:
-            da = da.sortby(axis)
-        except Exception:
-            pass
+    # Re-resolve lead dimension after singleton removal.
+    lead_dim = step if step and step in da.dims else None
+    if lead_dim is None:
+        # Prefer a coordinate/dimension whose name clearly means lead time.
+        for d in da.dims:
+            dl=d.lower()
+            if any(k in dl for k in ("lead", "step", "forecast_period")):
+                lead_dim=d; break
+    if lead_dim is None:
+        # A control forecast should have exactly one non-spatial temporal axis.
+        candidates=[d for d in da.dims if d not in (number, time_name)]
+        if len(candidates)==1 and da.sizes[candidates[0]]>1:
+            lead_dim=candidates[0]
 
-    if not axis or axis not in da.dims:
-        flat = da.values.reshape(-1)
-        return [
-            {"lead_day": i + 1, "discharge_m3s": _to_float(v), "p10_m3s": None, "p50_m3s": _to_float(v), "p90_m3s": None, "ensemble": False}
-            for i, v in enumerate(flat[:FORECAST_DAYS])
-            if _to_float(v) is not None
-        ]
+    if lead_dim is None or lead_dim not in da.dims:
+        raise RuntimeError(f"GloFAS forecast has no resolvable lead-time dimension; dims={dict(da.sizes)}")
 
-    # If ensemble members exist, calculate genuine percentile evidence.
+    # If a non-singleton reference-time axis remains, do not silently flatten it.
+    for d in list(da.dims):
+        if d in (lead_dim, number):
+            continue
+        if d == time_name:
+            raise RuntimeError(f"GloFAS forecast has unresolved reference-time dimension {d}={da.sizes[d]}")
+        if da.sizes[d] == 1:
+            da=da.isel({d:0},drop=True)
+        else:
+            # Any remaining spatial/unknown dimension should already have been
+            # selected; averaging it would fabricate a station value.
+            raise RuntimeError(f"GloFAS forecast has unresolved dimension {d}={da.sizes[d]}")
+
+    # Sort lead times using actual coordinate values. GloFAS uses daily output.
+    try:
+        vals=list(da[lead_dim].values)
+        order=sorted(range(len(vals)), key=lambda i:_lead_sort_value(vals[i]))
+        da=da.isel({lead_dim:order})
+    except Exception:
+        pass
+
+    n=min(limit, int(da.sizes[lead_dim]))
     if number and number in da.dims:
-        q = da.quantile([0.10, 0.50, 0.90], dim=number, skipna=True)
-        out = []
-        for i in range(min(FORECAST_DAYS, int(q.sizes[axis]))):
-            idx = {axis: i}
-            p10 = _to_float(q.sel(quantile=0.10).isel(idx).values)
-            p50 = _to_float(q.sel(quantile=0.50).isel(idx).values)
-            p90 = _to_float(q.sel(quantile=0.90).isel(idx).values)
+        q=da.quantile([0.10,0.50,0.90], dim=number, skipna=True)
+        out=[]
+        for i in range(n):
+            p10=_to_float(q.sel(quantile=0.10).isel({lead_dim:i}).values)
+            p50=_to_float(q.sel(quantile=0.50).isel({lead_dim:i}).values)
+            p90=_to_float(q.sel(quantile=0.90).isel({lead_dim:i}).values)
             if p50 is not None:
-                out.append({"lead_day": i + 1, "discharge_m3s": p50, "p10_m3s": p10, "p50_m3s": p50, "p90_m3s": p90, "ensemble": True})
+                out.append({"lead_day":i+1,"discharge_m3s":p50,"p10_m3s":p10,"p50_m3s":p50,"p90_m3s":p90,"ensemble":True})
         return out
 
-    values = da.values.reshape(-1)
-    out = []
-    for i, v in enumerate(values[:FORECAST_DAYS]):
-        x = _to_float(v)
+    out=[]
+    for i in range(n):
+        x=_to_float(da.isel({lead_dim:i}).values)
         if x is not None:
-            out.append({"lead_day": i + 1, "discharge_m3s": x, "p10_m3s": None, "p50_m3s": x, "p90_m3s": None, "ensemble": False})
+            out.append({"lead_day":i+1,"discharge_m3s":x,"p10_m3s":None,"p50_m3s":x,"p90_m3s":None,"ensemble":False})
+    if len(out)<min(3,limit):
+        raise RuntimeError(f"Only {len(out)} valid GloFAS lead days were parsed; expected {min(3,limit)}+")
     return out
-
 
 def _build_payload(issue_date, ds, stations):
     station_data = {}
@@ -324,10 +375,10 @@ def _historical_request_file(days, bbox):
     fd, path = tempfile.mkstemp(suffix=".nc")
     os.close(fd)
     request = {
-        "system_version": "version_5_0",
-        "hydrological_model": "lisflood",
-        "product_type": "intermediate",
-        "variable": VARIABLE,
+        "system_version": ["version_5_0"],
+        "hydrological_model": ["lisflood"],
+        "product_type": ["intermediate"],
+        "variable": [VARIABLE],
         "hyear": sorted({d.strftime("%Y") for d in days}),
         "hmonth": sorted({d.strftime("%m") for d in days}),
         "hday": sorted({d.strftime("%d") for d in days}),
