@@ -100,13 +100,9 @@ def _candidate_issue_dates():
     return [today - timedelta(days=i) for i in range(lookback + 1)]
 
 
-def _request_file(issue_date: date, product_type="control_forecast", bbox=None, lead_days=None):
+def _request_file(issue_date: date, product_type="control_forecast", bbox=None, days=None):
     fd, path = tempfile.mkstemp(suffix=".nc")
     os.close(fd)
-    if bbox is None:
-        bbox = BBOX
-    if lead_days is None:
-        lead_days = FORECAST_DAYS
     request = {
         "system_version": SYSTEM_VERSION,
         "hydrological_model": HYDRO_MODEL,
@@ -115,8 +111,8 @@ def _request_file(issue_date: date, product_type="control_forecast", bbox=None, 
         "year": issue_date.strftime("%Y"),
         "month": issue_date.strftime("%m"),
         "day": issue_date.strftime("%d"),
-        "leadtime_hour": [str(h) for h in range(24, (lead_days + 1) * 24, 24)],
-        "area": bbox,
+        "leadtime_hour": [str(h) for h in range(24, ((days or FORECAST_DAYS) + 1) * 24, 24)],
+        "area": bbox or BBOX,
         "data_format": "netcdf",
         "download_format": "unarchived",
     }
@@ -240,8 +236,8 @@ def fetch_all(stations, force=False):
         for issue_date in _candidate_issue_dates():
             path = None
             try:
-                path = _request_file(issue_date)
-                ds = xr.open_dataset(path)
+                path = _request_file(issue_date, product_type="control_forecast")
+                ds = xr.open_dataset(path, chunks=None)
                 try:
                     payload = _build_payload(issue_date, ds, stations)
                 finally:
@@ -266,42 +262,42 @@ def fetch_all(stations, force=False):
         raise RuntimeError(_cache["error"])
 
 
-def fetch_ensemble_forecast(station, lead_days=FORECAST_DAYS):
-    """Fetch genuine ensemble evidence for one station only.
+_ENSEMBLE_CACHE = {}
+_ENSEMBLE_LOCK = threading.RLock()
 
-    The production dashboard uses the much smaller control forecast. Research
-    mode can request ensemble percentiles for one selected station, avoiding a
-    memory-heavy Bangladesh-wide ensemble download on small Render instances.
+def fetch_station_ensemble(station, force=False):
+    """Fetch a small, station-local GloFAS ensemble payload for Research Mode.
+    This deliberately does NOT download the whole Bangladesh ensemble grid.
     """
-    pad = float(os.getenv("GLOFAS_ENSEMBLE_PAD_DEG", "0.10"))
-    bbox = [station["lat"] + pad, station["lon"] - pad, station["lat"] - pad, station["lon"] + pad]
-    path = None
-    issue_date = None
-    last_error = None
-    for candidate in _candidate_issue_dates():
-        try:
-            path = _request_file(candidate, product_type="ensemble_perturbed_forecasts", bbox=bbox, lead_days=lead_days)
-            ds = xr.open_dataset(path)
+    key=f"{station["lat"]:.3f},{station["lon"]:.3f}"
+    with _ENSEMBLE_LOCK:
+        cached=_ENSEMBLE_CACHE.get(key)
+        if cached and not force and time.time()-cached.get("_ts",0) < CACHE_TTL:
+            return cached["payload"]
+        last_error=None
+        pad=float(os.getenv("GLOFAS_RESEARCH_BBOX_PAD","0.10"))
+        bbox=[station["lat"]+pad, station["lon"]-pad, station["lat"]-pad, station["lon"]+pad]
+        for issue_date in _candidate_issue_dates():
+            path=None
             try:
-                series = _series_for(ds, station)
-            finally:
-                ds.close()
-            if series:
-                issue_date = candidate
-                return {"ok": True, "issue_date": candidate.isoformat(), "forecast": series,
-                        "source": "Copernicus CEMS / GloFAS operational ensemble",
-                        "dataset": DATASET, "variable": VARIABLE, "unit": "m3/s"}
-            last_error = f"{candidate.isoformat()}: no ensemble series returned"
-        except Exception as exc:
-            last_error = f"{candidate.isoformat()}: {exc}"
-        finally:
-            if path:
+                path=_request_file(issue_date, product_type="ensemble_perturbed_forecasts", bbox=bbox, days=FORECAST_DAYS)
+                ds=xr.open_dataset(path, chunks=None)
                 try:
-                    os.remove(path)
-                except OSError:
-                    pass
-            path = None
-    raise RuntimeError(last_error or "No GloFAS ensemble issue date could be fetched")
+                    series=_series_for(ds, station)
+                finally:
+                    ds.close()
+                if not series:
+                    raise RuntimeError("No ensemble discharge series returned for this research zone")
+                payload={"ok":True,"source":"Copernicus CEMS / GloFAS operational ensemble","dataset":DATASET,"issue_date":issue_date.isoformat(),"fetched_at":datetime.now(timezone.utc).isoformat(),"forecast":series}
+                _ENSEMBLE_CACHE[key]={"_ts":time.time(),"payload":payload}
+                return payload
+            except Exception as exc:
+                last_error=f"{issue_date.isoformat()}: {exc}"
+            finally:
+                if path:
+                    try: os.remove(path)
+                    except OSError: pass
+        raise RuntimeError(last_error or "GloFAS ensemble data unavailable")
 
 def fetch_glofas_forecast(stations, station_id, force=False):
     if station_id not in stations:
@@ -328,7 +324,7 @@ def _historical_request_file(days, bbox):
     fd, path = tempfile.mkstemp(suffix=".nc")
     os.close(fd)
     request = {
-        "system_version": "version_4_0",
+        "system_version": "version_5_0",
         "hydrological_model": "lisflood",
         "product_type": "intermediate",
         "variable": VARIABLE,

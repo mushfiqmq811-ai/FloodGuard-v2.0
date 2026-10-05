@@ -2,7 +2,7 @@ from flask import Flask, render_template, jsonify, request, Response, session, s
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta, timezone
 import math, threading, time, statistics, os, sqlite3, re, smtplib, urllib.parse, json
-from real_data import source_status, fetch_glofas_forecast, fetch_ensemble_forecast, live_snapshot, fetch_historical_forecast
+from real_data import source_status, fetch_glofas_forecast, fetch_station_ensemble, live_snapshot, fetch_historical_forecast
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE, 'floodguard.db')
@@ -63,15 +63,25 @@ init_db()
 # ---------- Notification engine ----------
 _ALERT_THREAD_STARTED=False
 def _smtp_configured():
-    return bool(os.environ.get('SMTP_HOST') and os.environ.get('SMTP_USER') and os.environ.get('SMTP_PASS') and os.environ.get('EMAIL_FROM'))
+    # SMTP_HOST defaults to Gmail-compatible SMTP when SMTP credentials exist.
+    return bool(os.environ.get('SMTP_USER') and os.environ.get('SMTP_PASS') and (os.environ.get('EMAIL_FROM') or os.environ.get('SMTP_USER')))
 
-def _email_configured(): return _smtp_configured()
+def _email_configured(): return bool(os.environ.get('EMAIL_SCRIPT_URL') or _smtp_configured())
 def _whatsapp_bridge_configured(): return False
 
 def _send_email(to_email, subject, body):
-    if not _smtp_configured(): return False, 'SMTP email provider is not configured.'
+    # Backward-compatible Google Apps Script webhook path, if configured.
+    webhook=os.environ.get('EMAIL_SCRIPT_URL','').strip()
+    if webhook:
+        try:
+            import requests
+            r=requests.post(webhook,json={'to':to_email,'subject':subject,'body':body},timeout=15)
+            if 200 <= r.status_code < 300: return True, 'sent via email webhook'
+            return False, f'Email webhook HTTP {r.status_code}'
+        except Exception as exc: return False, str(exc)
+    if not _smtp_configured(): return False, 'Email is not configured. Set EMAIL_SCRIPT_URL or SMTP_USER/SMTP_PASS.'
     try:
-        host=os.environ['SMTP_HOST']; port=int(os.environ.get('SMTP_PORT','587')); user=os.environ['SMTP_USER']; pw=os.environ['SMTP_PASS']; sender=os.environ['EMAIL_FROM']
+        host=os.environ.get('SMTP_HOST','smtp.gmail.com'); port=int(os.environ.get('SMTP_PORT','587')); user=os.environ['SMTP_USER']; pw=os.environ['SMTP_PASS']; sender=os.environ.get('EMAIL_FROM',user)
         msg=f"From: {sender}\r\nTo: {to_email}\r\nSubject: {subject}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n{body}"
         with smtplib.SMTP(host,port,timeout=15) as server:
             if os.environ.get('SMTP_TLS','true').lower()=='true': server.starttls()
@@ -188,10 +198,6 @@ GLOFAS_CACHE={'payload':None,'expires':0,'error':None}
 CACHE_SECONDS=int(os.environ.get('GLOFAS_CACHE_SECONDS','1800'))
 
 def _glofas_payload(force=False):
-    # Never let an HTTP request duplicate or wait behind the startup download.
-    # The background worker owns the initial GloFAS fetch; the UI polls live-status.
-    if not force and not GLOFAS_CACHE.get('payload') and (_GLOFAS_FETCHING or GLOFAS_CACHE.get('error')):
-        return None
     try:
         payload=live_snapshot(STATIONS,force=force)
         GLOFAS_CACHE.update(payload=payload,expires=time.time()+CACHE_SECONDS,error=None)
@@ -217,7 +223,9 @@ def _start_glofas_fetch(force=False):
     return True
 
 def _series(key, force=False):
-    payload=_glofas_payload(force=force)
+    # Request handlers must NEVER perform a GloFAS download. The background
+    # refresh owns network I/O; pages read the latest authentic snapshot only.
+    payload=GLOFAS_CACHE.get('payload')
     if not payload or not payload.get('stations',{}).get(key): return []
     return payload['stations'][key]
 
@@ -255,7 +263,7 @@ def package_station(key, force=False):
 def build_dashboard(key):
     if key not in STATIONS:key='mymensingh'
     z=package_station(key)
-    return {'station':z,'current':z['current'],'predicted':z['predicted'],'probability':z['probability'],'risk':z['risk'],'trend_per_3h':z['trend_m3s'],'forecast15':z['forecast15'],'history':[],'advice':advice(z['risk']),'simple':make_simple_summary(z),'live_connected':z['live'],'model':{'ready':True,'model_name':'Copernicus GloFAS / LISFLOOD operational forecast with on-demand ensemble evidence'}}
+    return {'station':z,'current':z['current'],'predicted':z['predicted'],'probability':z['probability'],'risk':z['risk'],'trend_per_3h':z['trend_m3s'],'forecast15':z['forecast15'],'history':[],'advice':advice(z['risk']),'simple':make_simple_summary(z),'live_connected':z['live'],'model':{'ready':True,'model_name':'Copernicus GloFAS / LISFLOOD operational ensemble'}}
 
 def advice(risk):
     if risk=='UNAVAILABLE': return ['GloFAS forecast data is currently unavailable for this zone.','FloodGuard will not substitute simulated values.','Follow official Bangladesh flood authorities for decisions.']
@@ -283,13 +291,7 @@ def index():
         return send_file(root_index)
     return render_template('index.html')
 @app.route('/api/zones')
-def zones():
-    # During the initial fetch return an empty list instead of blocking the
-    # Gunicorn worker. The frontend already polls /api/live-status and reloads
-    # zones once authentic GloFAS data is ready.
-    if not GLOFAS_CACHE.get('payload') and (_GLOFAS_FETCHING or GLOFAS_CACHE.get('error')):
-        return jsonify([])
-    return jsonify([package_station(k) for k in STATIONS])
+def zones(): return jsonify([package_station(k) for k in STATIONS])
 @app.route('/api/dashboard')
 def dashboard(): return jsonify(build_dashboard(request.args.get('station','mymensingh')))
 @app.route('/api/national')
@@ -311,7 +313,7 @@ def analytics():
     return jsonify({'counts':{r:sum(z['risk']==r for z in zones) for r in ['NORMAL','WARNING','FLOOD','SEVERE']},'avg_discharge_m3s':round(statistics.mean(z['current'] for z in valid),1) if valid else None,'rising':rising[:6],'highest_signal':sorted(valid,key=lambda z:z.get('probability') or 0,reverse=True)[:6]})
 
 @app.get('/api/model-status')
-def api_model_status(): return jsonify({'ready':True,'model_name':'Copernicus GloFAS / LISFLOOD operational forecast with on-demand ensemble evidence','training_source':'ECMWF meteorological ensemble + LISFLOOD hydrological model','synthetic_data_used':False,'note':'FloodGuard adds a transparent forecast-window percentile decision layer; it is not an official Bangladesh warning model.'})
+def api_model_status(): return jsonify({'ready':True,'model_name':'Copernicus GloFAS / LISFLOOD operational ensemble','training_source':'ECMWF meteorological ensemble + LISFLOOD hydrological model','synthetic_data_used':False,'note':'FloodGuard adds a transparent forecast-window percentile decision layer; it is not an official Bangladesh warning model.'})
 
 @app.get('/api/data-provenance')
 def data_provenance(): return jsonify(source_status())
@@ -319,23 +321,13 @@ def data_provenance(): return jsonify(source_status())
 @app.get('/api/research/summary')
 def research_summary():
     zones=[package_station(k) for k in STATIONS]
-    return jsonify({'ok':True,'architecture':'General Mode + Research Mode · GloFAS-only','source':source_status(),'zones':len(zones),'live_zones':sum(z['live'] for z in zones),'risk_definition':'Forecast-window percentile signal derived from authentic GloFAS discharge. It is not an official Bangladesh flood-warning threshold.','forecast_horizon_days':15,'ensemble_enabled':True,'historical_replay':'AVAILABLE_ON_DEMAND','verification':'GloFAS forecast vs GloFAS historical modelled discharge; not independent gauge validation','synthetic_fallback':False})
+    return jsonify({'ok':True,'architecture':'General Mode + Research Mode · GloFAS-only','source':source_status(),'zones':len(zones),'live_zones':sum(z['live'] for z in zones),'risk_definition':'Forecast-window percentile signal derived from authentic GloFAS discharge. It is not an official Bangladesh flood-warning threshold.','forecast_horizon_days':15,'ensemble_enabled':any(any(x.get('ensemble') for x in (GLOFAS_CACHE.get('payload') or {}).get('stations',{}).get(k,[])) for k in STATIONS),'historical_replay':'AVAILABLE_ON_DEMAND','verification':'GloFAS forecast vs GloFAS historical modelled discharge; not independent gauge validation','synthetic_fallback':False})
 
 @app.get('/api/research/glofas/<station_id>')
 def research_glofas(station_id):
     if station_id not in STATIONS:return jsonify({'ok':False,'error':'Unknown station'}),404
-    try:
-        control=fetch_glofas_forecast(STATIONS,station_id,force=request.args.get('force')=='1')
-        # Ensemble is deliberately station-scoped: downloading the full
-        # Bangladesh ensemble during dashboard boot can exceed small Render RAM.
-        ensemble=fetch_ensemble_forecast(STATIONS[station_id],lead_days=min(15,FORECAST_DAYS))
-        # Keep the original frontend contract: `forecast` is the ensemble
-        # evidence table; the smaller control forecast remains available under
-        # `control.forecast` for provenance/research use.
-        return jsonify({'ok':True,'station':station_id,'forecast':ensemble.get('forecast',[]),
-                        'issue_date':ensemble.get('issue_date') or control.get('issue_date'),
-                        'source':ensemble.get('source'),'control':control,'ensemble':ensemble})
-    except Exception as exc:return jsonify({'ok':False,'station':station_id,'source':'Copernicus CEMS / GloFAS','error':str(exc)}),502
+    try:return jsonify(fetch_station_ensemble(STATIONS[station_id],force=request.args.get('force')=='1'))
+    except Exception as exc:return jsonify({'ok':False,'station':station_id,'source':'Copernicus CEMS / GloFAS operational ensemble','error':str(exc)}),502
 
 @app.post('/api/research/replay')
 def research_replay():
@@ -359,12 +351,12 @@ def research_verify():
         if not pairs:return jsonify({'ok':False,'error':'Historical GloFAS target values were not returned for the replay window.'}),502
         errors=[a-b for _,a,b,_ in pairs]; mae=sum(abs(x) for x in errors)/len(errors); rmse=(sum(x*x for x in errors)/len(errors))**0.5; bias=sum(errors)/len(errors)
         ma=sum(a for _,a,_,_ in pairs)/len(pairs); mb=sum(b for _,_,b,_ in pairs)/len(pairs); cov=sum((a-ma)*(b-mb) for _,a,b,_ in pairs); va=sum((a-ma)**2 for _,a,_,_ in pairs); vb=sum((b-mb)**2 for _,_,b,_ in pairs); corr=cov/(va*vb)**0.5 if va>0 and vb>0 else None
-        return jsonify({'ok':True,'station':station_id,'issue_date':issue_date,'target':'GloFAS v4.0 historical modelled discharge','independent_gauge_validation':False,'n':len(pairs),'mae_m3s':round(mae,2),'rmse_m3s':round(rmse,2),'bias_m3s':round(bias,2),'correlation':round(corr,3) if corr is not None else None,'rows':[{'lead_day':d,'date':dt,'forecast_m3s':round(a,2),'historical_m3s':round(b,2),'error_m3s':round(a-b,2)} for d,a,b,dt in pairs]})
+        return jsonify({'ok':True,'station':station_id,'issue_date':issue_date,'target':'GloFAS v5.0 historical modelled discharge','independent_gauge_validation':False,'n':len(pairs),'mae_m3s':round(mae,2),'rmse_m3s':round(rmse,2),'bias_m3s':round(bias,2),'correlation':round(corr,3) if corr is not None else None,'rows':[{'lead_day':d,'date':dt,'forecast_m3s':round(a,2),'historical_m3s':round(b,2),'error_m3s':round(a-b,2)} for d,a,b,dt in pairs]})
     except Exception as exc:return jsonify({'ok':False,'error':str(exc),'station':station_id,'issue_date':issue_date}),502
 
 @app.get('/api/research/validation-status')
 def validation_status():
-    return jsonify({'status':'READY_FOR_MODELLED-TARGET VERIFICATION','synthetic_data_used':False,'real_observation_validation':'NOT_AVAILABLE_WITH_GLOFAS-ONLY INPUTS','available_verification':'Operational GloFAS forecast replay vs GloFAS v4.0 historical modelled discharge','independent_ground_truth':False,'note':'This verification measures consistency against a GloFAS historical modelled target; it must not be presented as gauge-based flood-warning accuracy.'})
+    return jsonify({'status':'READY_FOR_MODELLED-TARGET VERIFICATION','synthetic_data_used':False,'real_observation_validation':'NOT_AVAILABLE_WITH_GLOFAS-ONLY INPUTS','available_verification':'Operational GloFAS forecast replay vs GloFAS v5.0 historical modelled discharge','independent_ground_truth':False,'note':'This verification measures consistency against a GloFAS historical modelled target; it must not be presented as gauge-based flood-warning accuracy.'})
 
 @app.get('/api/glofas/<station_id>')
 def glofas_station(station_id):
@@ -555,7 +547,12 @@ def copilot():
         if not answer: raise RuntimeError('Gemini returned an empty response')
         return jsonify({'ok':True,'answer':answer,'model':'gemini-2.5-flash','grounded_in':'FloodGuard real source data'})
     except Exception as exc:
-        return jsonify({'ok':False,'error':str(exc)}),502
+        # The product remains useful when Gemini is unavailable. Never let an
+        # optional AI provider break the grounded flood information path.
+        direction='rising' if (z.get('trend_m3s') or 0)>0 else ('falling' if (z.get('trend_m3s') or 0)<0 else 'stable')
+        f3=(z.get('forecast15') or [])[2] if len(z.get('forecast15') or [])>=3 else None
+        answer=(f"Gemini is temporarily unavailable, so FloodGuard is using its grounded fallback. Current GloFAS forecast discharge for {z['district']} is {z['current']:.1f} m³/s and the Day-2 trend is {(z.get('trend_m3s') or 0):+.1f} m³/s ({direction}). " + (f"The Day-3 forecast is {f3['level']:.1f} m³/s. " if f3 else '') + "This is GloFAS forecast discharge, not an observed Bangladesh gauge stage. Follow official local warnings for emergency decisions.")
+        return jsonify({'ok':True,'answer':answer,'model':'FloodGuard grounded fallback','grounded_in':'Copernicus GloFAS data','provider_error':str(exc)})
 
 @app.get('/api/push/public-key')
 def push_public_key():

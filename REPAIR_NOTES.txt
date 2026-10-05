@@ -1,0 +1,8 @@
+FloodGuard BD repair build
+- Request handlers no longer trigger synchronous GloFAS downloads. Background refresh owns network I/O.
+- Main operational feed uses GloFAS control forecast; research mode requests a small station-local ensemble.
+- Historical research request updated to GloFAS v5.0.
+- Added explicit 72-hour, 7-day and 15-day projection cards.
+- Wired Copilot button and grounded fallback when Gemini is unavailable.
+- Wired browser notification enable flow.
+- Research replay/verification errors remain explicit and never fabricate data.
