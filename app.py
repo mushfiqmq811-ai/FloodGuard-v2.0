@@ -1,6 +1,6 @@
 from flask import Flask, render_template, jsonify, request, Response, session, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import math, threading, time, statistics, os, sqlite3, re, urllib.parse, json
 from real_data import source_status, fetch_glofas_forecast, fetch_station_ensemble, live_snapshot, fetch_historical_forecast
 
@@ -275,13 +275,36 @@ def healthz():
     payload=GLOFAS_CACHE.get('payload')
     return jsonify({'ok':True,'service':'FloodGuard BD','glofas_connected':bool(payload),'glofas_issue_date':payload.get('issue_date') if payload else None,'glofas_fetched_at':payload.get('fetched_at') if payload else None,'background_alerts':bool(_ALERT_THREAD_STARTED)})
 
-@app.route('/')
-def index():
-    # Serve the root index.html directly so deployment does not depend on templates/ being uploaded.
+PAGE_ROUTES = {
+    '/': 'dashboard',
+    '/monitor': 'zones',
+    '/zones': 'zones',
+    '/map': 'maps',
+    '/forecast': 'forecast',
+    '/analytics': 'analytics',
+    '/research': 'research',
+    '/how-it-works': 'about',
+    '/hazards': 'hazards',
+    '/simulation': 'simulation',
+    '/alerts': 'account',
+}
+
+def _serve_app_page(page='dashboard'):
     root_index = os.path.join(BASE, 'index.html')
     if os.path.exists(root_index):
-        return send_file(root_index)
+        response = send_file(root_index)
+        response.headers['X-FloodGuard-Page'] = page
+        return response
     return render_template('index.html')
+
+@app.route('/')
+def index():
+    return _serve_app_page('dashboard')
+
+for _route, _page in PAGE_ROUTES.items():
+    if _route == '/':
+        continue
+    app.add_url_rule(_route, endpoint='page_' + _page + _route.replace('/', '_').replace('-', '_'), view_func=lambda page=_page: _serve_app_page(page), methods=['GET'])
 @app.route('/api/zones')
 def zones(): return jsonify([package_station(k) for k in STATIONS])
 @app.route('/api/dashboard')

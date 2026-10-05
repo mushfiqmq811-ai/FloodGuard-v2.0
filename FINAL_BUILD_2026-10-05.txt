@@ -1,0 +1,23 @@
+FloodGuard BD — FINAL MULTI-PAGE BUILD
+Date: 2026-10-05
+
+This build adds clean URL-based pages while preserving the existing UI and GloFAS-only data architecture.
+
+Routes:
+/               Home
+/monitor        Live Monitor / Zones
+/map            Flood Map
+/forecast       Forecast
+/analytics      Analytics
+/research       Research Lab
+/how-it-works   Methodology
+/hazards        Hazards
+/simulation     Simulation Lab
+/alerts         Alert Center / Account
+
+Important:
+- No synthetic hydrological fallback.
+- GloFAS remains the sole hydrological forecast source.
+- GloFAS fetch/cache is shared; pages do not independently download GloFAS.
+- Research verification uses GloFAS historical modelled discharge, not independent gauge truth.
+- Existing UI design was not intentionally redesigned.

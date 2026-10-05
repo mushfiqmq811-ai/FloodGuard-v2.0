@@ -6,7 +6,7 @@ This build fixes the upstream forecast parsing path and removes the misleading
 Data rules:
 - Copernicus CEMS / GloFAS operational forecast is the only hydrological source.
 - No synthetic hydrological fallback.
-- Control forecast powers the public 20-zone dashboard.
+- Control forecast powers the public 6-zone dashboard.
 - Research Mode requests a small selected-zone ensemble.
 - A forecast is accepted only when at least 3 valid lead days are parsed; normal
   public operation expects all 15 requested lead days.

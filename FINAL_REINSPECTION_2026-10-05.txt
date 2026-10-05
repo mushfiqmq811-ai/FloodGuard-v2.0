@@ -21,6 +21,6 @@ Implemented in this build:
 - No synthetic hydrological fallback.
 
 Validation required after deploy:
-/api/glofas/diagnostics -> station_count 20, min/max 15 is the success target.
+/api/glofas/diagnostics -> station_count 6, forecast lengths 15 is the success target.
 Then test /api/zones, /api/dashboard?station=sylhet, /api/analytics, /api/research/summary, /api/research/glofas/sylhet.
 Historical replay/verification must be tested separately because it depends on the selected historical date being available.
