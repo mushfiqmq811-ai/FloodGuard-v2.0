@@ -1,0 +1,41 @@
+FLOODGUARD BD — REAL-DATA DEPLOYMENT
+
+Build command:
+pip install -r requirements.txt && (python train_real_model.py || echo "REAL_MODEL_TRAINING_NOT_AVAILABLE_AT_BUILD_TIME")
+
+Start command:
+gunicorn --bind 0.0.0.0:$PORT app:app
+
+Required Render environment variables:
+SECRET_KEY=<long random secret>
+CDS_API_KEY=<private Copernicus EWDS personal access token>
+CDS_API_URL=https://ewds.climate.copernicus.eu/api
+GEMINI_API_KEY=<private Gemini API key>
+SMTP_HOST=<SMTP server>
+SMTP_PORT=587
+SMTP_USER=<SMTP username>
+SMTP_PASS=<SMTP password>
+EMAIL_FROM=<verified sender address>
+SMTP_TLS=true
+VAPID_PUBLIC_KEY=<Web Push public key>
+VAPID_PRIVATE_KEY=<Web Push private key>
+VAPID_CLAIMS_EMAIL=mailto:<contact email>
+
+Optional:
+LIVE_REFRESH_SECONDS=300
+ALERT_CHECK_SECONDS=300
+SOURCE_HTTP_TIMEOUT=25
+REAL_MODEL_MIN_ROWS=100
+
+Important:
+- Do not put secrets in source files.
+- No synthetic/demo fallback exists in the production data path.
+- If authentic BWDB data cannot be fetched, the application reports DATA UNAVAILABLE.
+- The real model must be trained before AI forecast output becomes available.
+
+The web service can start even when an external source is temporarily unavailable.
+If no trained model artifact exists, the dashboard explicitly reports forecast DATA UNAVAILABLE rather than fabricating predictions.
+Run the real training job only after authentic BWDB history is reachable:
+python train_real_model.py
+
+Training aborts rather than generating artificial rows if BWDB chart observations are insufficient.

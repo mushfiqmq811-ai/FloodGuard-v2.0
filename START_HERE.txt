@@ -1,0 +1,9 @@
+FLOODGUARD BD — INSTANT DATA + BACKGROUND LIVE SYNC
+
+1. Double-click run.bat
+2. The app opens at http://127.0.0.1:5081
+3. Dashboard data is loaded immediately from local fallback/last-known data.
+4. FFWC live checking runs in the background and never blocks the dashboard.
+5. If FFWC is unavailable, the dashboard stays usable and labels the data clearly.
+
+True FFWC API access may require developer registration/credentials. Fallback data is never labelled LIVE.

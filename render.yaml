@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: floodguard-bd
+    env: python
+    buildCommand: pip install -r requirements.txt && (python train_real_model.py || echo "REAL_MODEL_TRAINING_NOT_AVAILABLE_AT_BUILD_TIME; service will remain live with DATA UNAVAILABLE until authentic training data is available")
+    startCommand: gunicorn --bind 0.0.0.0:$PORT app:app
+    autoDeploy: true
