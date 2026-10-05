@@ -2,18 +2,14 @@ from flask import Flask, render_template, jsonify, request, Response, session, s
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta, timezone
 import math, threading, time, statistics, os, sqlite3, re, smtplib, urllib.parse, json
-from live_data import fetch_ffwc_current
-from model import predict_flood, model_status
-from explainability import explain_model
-from real_data import source_status, fetch_glofas_forecast_file, extract_glofas_series
-from historical_replay import replay_case
+from real_data import source_status, fetch_glofas_forecast, live_snapshot, fetch_historical_forecast
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE, 'floodguard.db')
 app = Flask(__name__, template_folder='.', static_folder='static')
 app.secret_key = os.environ.get('SECRET_KEY', 'floodguard-dev-secret-change-me')
 
-# Historical observations are fetched from BWDB Hydrology at runtime. No embedded synthetic history is used.
+# Operational data source: Copernicus CEMS / GloFAS only. No synthetic fallback.
 
 # Representative station set. Danger-level values are configuration references, not claims of current official measurements.
 STATIONS = {
@@ -121,17 +117,16 @@ def _set_alert_state(user_id, **fields):
     con=db(); con.execute('INSERT INTO alert_state(user_id,last_risk,last_daily_date,welcome_sent,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET last_risk=excluded.last_risk,last_daily_date=excluded.last_daily_date,welcome_sent=excluded.welcome_sent,updated_at=excluded.updated_at',(user_id,last_risk,last_daily_date,welcome_sent,now)); con.commit(); con.close()
 
 def _message_for(z,lang,kind):
-    risk=z['risk']; district=z['district']; current=z['current']; danger=z['danger']; trend=z['trend_3h_cm']; predicted=z['predicted']
-    if risk=='UNAVAILABLE' or current is None: return f'FloodGuard BD — Authentic BWDB data is currently unavailable for {district}. No artificial values are substituted. Follow official BWDB/FFWC updates.'
-    direction='rising' if trend>0.2 else ('falling' if trend<-0.2 else 'stable')
+    risk=z.get('risk'); district=z.get('district'); current=z.get('current'); trend=z.get('trend_m3s'); predicted=z.get('predicted')
+    if risk=='UNAVAILABLE' or current is None: return f'FloodGuard BD — GloFAS forecast data is currently unavailable for {district}. No artificial values are substituted.'
+    direction='rising' if (trend or 0)>0 else ('falling' if (trend or 0)<0 else 'stable')
     if lang=='bn':
-        if kind=='welcome': return f"FloodGuard BD\nআপনার {district} zone-এর flood alert চালু হয়েছে। বর্তমান ঝুঁকি: {risk_label_bn(risk)}।"
-        if kind=='daily': return f"FloodGuard BD — দৈনিক বন্যা আপডেট\n{district}: পানির স্তর {current:.2f} মি; গত ৩ ঘণ্টায় {'বাড়ছে' if direction=='rising' else 'কমছে' if direction=='falling' else 'প্রায় স্থির'}। ঝুঁকি: {risk_label_bn(risk)}। আগামী ২৪ ঘণ্টার আনুমানিক স্তর: {predicted:.2f} মি।"
-        return f"FloodGuard BD সতর্কতা\n{district}-এ ঝুঁকির স্তর {risk_label_bn(risk)} হয়েছে। বর্তমান পানি {current:.2f} মি; রেফারেন্স বিপদসীমা {danger:.2f} মি। স্থানীয় কর্তৃপক্ষের নির্দেশনা অনুসরণ করুন।"
-    else:
-        if kind=='welcome': return f"FloodGuard BD\nFlood alerts for your {district} zone are now enabled. Current risk: {risk}."
-        if kind=='daily': return f"FloodGuard BD — Daily flood update\n{district}: water level {current:.2f} m; {direction} over the last 3 hours. Risk: {risk}. Next-24h estimate: {predicted:.2f} m."
-        return f"FloodGuard BD alert\nRisk in {district} changed to {risk}. Current water level: {current:.2f} m; danger reference: {danger:.2f} m. Follow local-authority guidance."
+        if kind=='welcome': return f"FloodGuard BD\nআপনার {district} zone-এর alert চালু হয়েছে। বর্তমান GloFAS relative signal: {risk_label_bn(risk)}।"
+        if kind=='daily': return f"FloodGuard BD — দৈনিক আপডেট\n{district}: GloFAS discharge {current:.1f} m³/s; signal {risk_label_bn(risk)}; day-2 trend {direction}।"
+        return f"FloodGuard BD সতর্কতা\n{district}-এ GloFAS relative high-flow signal: {risk_label_bn(risk)}। Forecast discharge {current:.1f} m³/s। স্থানীয় কর্তৃপক্ষের নির্দেশনা অনুসরণ করুন।"
+    if kind=='welcome': return f"FloodGuard BD\nAlerts for {district} are enabled. Current GloFAS relative signal: {risk}."
+    if kind=='daily': return f"FloodGuard BD — Daily update\n{district}: GloFAS discharge {current:.1f} m³/s; signal {risk}; day-2 trend {direction}."
+    return f"FloodGuard BD alert\n{district}: GloFAS relative high-flow signal changed to {risk}. Forecast discharge: {current:.1f} m³/s. Follow local-authority guidance."
 
 def risk_label_bn(r): return {'NORMAL':'স্বাভাবিক','WARNING':'সতর্কতা','FLOOD':'বন্যার ঝুঁকি','SEVERE':'তীব্র ঝুঁকি'}.get(r,r)
 
@@ -188,148 +183,80 @@ def start_alert_loop():
     threading.Thread(target=_alert_loop,daemon=True,name='floodguard-alerts').start()
 
 
-def _live_worker():
-    global _worker_running
+GLOFAS_CACHE={'payload':None,'expires':0,'error':None}
+CACHE_SECONDS=int(os.environ.get('GLOFAS_CACHE_SECONDS','1800'))
+
+def _glofas_payload(force=False):
     try:
-        with _cache_lock:
-            LIVE_CACHE['state']='syncing'; LIVE_CACHE['last_attempt']=datetime.now(timezone.utc).isoformat()
-        payload=fetch_ffwc_current(STATIONS)
-        with _cache_lock:
-            LIVE_CACHE.update(payload=payload, expires=time.time()+CACHE_SECONDS, error=None, state='connected')
+        payload=live_snapshot(STATIONS,force=force)
+        GLOFAS_CACHE.update(payload=payload,expires=time.time()+CACHE_SECONDS,error=None)
+        return payload
     except Exception as exc:
-        with _cache_lock:
-            LIVE_CACHE['error']=str(exc); LIVE_CACHE['state']='stale' if LIVE_CACHE.get('payload') else 'unavailable'
-    finally:
-        with _worker_lock: _worker_running=False
+        GLOFAS_CACHE['error']=str(exc)
+        return None
 
-def trigger_live_refresh(force=False):
-    global _worker_running
-    with _worker_lock:
-        now=time.time()
-        if _worker_running or (not force and LIVE_CACHE.get('payload') and now < LIVE_CACHE.get('expires',0)):
-            return False
-        _worker_running=True
-        threading.Thread(target=_live_worker, daemon=True).start(); return True
+def _series(key, force=False):
+    payload=_glofas_payload(force=force)
+    if not payload or not payload.get('stations',{}).get(key): return []
+    return payload['stations'][key]
 
-# Start notification worker on WSGI import so Gunicorn/Render also processes scheduled alerts.
-try:
-    start_alert_loop()
-except Exception:
-    pass
+def risk_for_discharge(series, value):
+    if value is None or not series: return 'UNAVAILABLE',None
+    vals=[float(x['discharge_m3s']) for x in series if x.get('discharge_m3s') is not None]
+    if not vals:return 'UNAVAILABLE',None
+    # Relative high-flow signal: intentionally NOT a national flood-warning threshold.
+    lo=min(vals); hi=max(vals); span=max(hi-lo,1e-9); rel=(float(value)-lo)/span
+    if rel>=.90:r='SEVERE'
+    elif rel>=.75:r='FLOOD'
+    elif rel>=.55:r='WARNING'
+    else:r='NORMAL'
+    return r,round(max(0,min(99,rel*100)),1)
 
-@app.before_request
-def _ensure_background_live_sync():
-    # Never block a page request. If the cache is stale/empty, launch one background refresh.
-    trigger_live_refresh(False)
-
-def live_snapshot():
-    with _cache_lock:
-        payload=LIVE_CACHE.get('payload'); state=LIVE_CACHE.get('state','idle'); err=LIVE_CACHE.get('error')
-    if payload: return payload
-    return {'ok':False,'source':'FFWC public feed','source_url':'https://ffwc.gov.bd/app/observed-water-level','fetched_at':None,'table_date':None,'data':{},'state':state,'error':err}
-
-def norm(x): return ''.join(ch for ch in str(x).lower() if ch.isalnum())
-
-def live_for_station(key):
-    st=STATIONS[key]; snap=live_snapshot(); data=snap.get('data',{})
-    target=(norm(st['river']),norm(st['station']))
-    hit=data.get(target)
-    if hit: return {**hit,'live':True,'simulation':False}
-    for (river,station),v in data.items():
-        if station==norm(st['station']) or station in norm(st['station']) or norm(st['station']) in station:
-            return {**v,'live':True,'simulation':False}
-    return {'live':False,'simulation':False,'unavailable':True,'source':'BWDB Hydrology chart unavailable','source_url':'https://www.hydrology.bwdb.gov.bd/'}
-
-def make_history(key, current=None):
-    st=STATIONS[key]; snap=live_snapshot(); data=snap.get('data',{}); target=(norm(st['river']),norm(st['station']))
-    hit=data.get(target)
-    if not hit:
-        for (river,station),v in data.items():
-            if station==norm(st['station']) or station in norm(st['station']) or norm(st['station']) in station:
-                hit=v; break
-    if not hit or not hit.get('history'):
-        return []
-    return hit['history']
-
-def risk_for(level,danger):
-    if level is None or danger is None: return 'UNAVAILABLE'
-    r=level/danger if danger else 0
-    if r>=1.02:return 'SEVERE'
-    if r>=0.96:return 'FLOOD'
-    if r>=0.86:return 'WARNING'
-    return 'NORMAL'
-
-def predict_24h(history,current,danger):
-    if current is None or danger is None or len(history)<4:
-        return None,None,'UNAVAILABLE',None
-    levels=[float(x['level']) for x in history[-4:]]
-    hyd={'water_level':levels[-1],'water_level_6h_ago':levels[-2],'water_level_12h_ago':levels[-3],'water_level_24h_ago':levels[-4]}
-    out=predict_flood(hyd,{},danger)
-    pred=out.get('predicted_water_level_24h'); risk=out.get('risk','UNAVAILABLE')
-    slope=(levels[-1]-levels[-2])
-    return pred,None,risk,round(slope,4)
-
-def forecast_15_days(history,danger,key):
-    """Recursive forecast using only the real-data-trained model. If model is unavailable, return no forecast."""
-    if len(history)<4 or not model_status().get('ready'): return []
-    levels=[float(x['level']) for x in history[-4:]]; out=[]
-    today=datetime.now().astimezone()
-    for day in range(1,16):
-        hyd={'water_level':levels[-1],'water_level_6h_ago':levels[-2],'water_level_12h_ago':levels[-3],'water_level_24h_ago':levels[-4]}
-        pred=predict_flood(hyd,{},danger)
-        level=pred.get('predicted_water_level_24h')
-        if level is None: return []
-        risk=risk_for(level,danger)
-        out.append({'date':(today+timedelta(days=day)).strftime('%Y-%m-%d'),'level':round(level,2),'probability':None,'risk':risk,'uncertainty':None,'model':pred.get('model'),'source':'Real-data-trained model'})
-        levels.append(level); levels=levels[-4:]
-    return out
-
-def package_station(key):
-    st=STATIONS[key]; live=live_for_station(key)
-    current=live.get('current'); danger=live.get('danger') or st.get('danger')
-    hist=make_history(key,current)
-    pred,prob,risk,slope=predict_24h(hist,current,danger)
-    if risk=='UNAVAILABLE' and current is not None:
-        risk=risk_for(current,danger)
-    f15=forecast_15_days(hist,danger,key)
-    status='LIVE BWDB' if live.get('live') else 'DATA UNAVAILABLE'
+def package_station(key, force=False):
+    st=STATIONS[key]; series=_series(key,force=force); first=series[0] if series else None
+    current=first.get('discharge_m3s') if first else None
+    risk,prob=risk_for_discharge(series,current)
+    trend=None
+    if len(series)>=2: trend=round(float(series[1]['discharge_m3s'])-float(series[0]['discharge_m3s']),2)
+    forecast=[]
+    for x in series[:15]:
+        rr,pp=risk_for_discharge(series,x.get('discharge_m3s'))
+        forecast.append({'date':(datetime.now().astimezone()+timedelta(days=int(x['lead_day']))).strftime('%Y-%m-%d'),'level':round(float(x['discharge_m3s']),1),'discharge_m3s':round(float(x['discharge_m3s']),1),'probability':pp,'risk':rr,'uncertainty':round((float(x['p90_m3s'])-float(x['p10_m3s']))/2,1) if x.get('p90_m3s') is not None else None,'source':'GloFAS operational forecast'})
+    status='LIVE GLOFAS' if current is not None else 'DATA UNAVAILABLE'
     return {'id':key,'name':st['name'],'district':st['district'],'division':st['division'],'river':st['river'],'station':st['station'],
-            'current':round(float(current),2) if current is not None else None,'predicted':pred,'probability':prob,'risk':risk,
-            'danger':round(float(danger),2) if danger is not None else None,'lat':st['lat'],'lon':st['lon'],
-            'trend_3h_cm':round(slope*100,1) if slope is not None else None,'live':bool(live.get('live')),'simulation':False,
-            'snapshot':False,'status':status,'source':live.get('source'),'source_url':live.get('source_url'),
-            'observed_at':live.get('observed_at'),'fetched_at':live_snapshot().get('fetched_at'),'forecast15':f15,
-            'day15':f15[-1]['level'] if f15 else None,'day15risk':f15[-1]['risk'] if f15 else 'UNAVAILABLE',
-            'history_points':len(hist),'model_ready':bool(model_status().get('ready'))}
+            'current':round(float(current),1) if current is not None else None,'predicted':forecast[0]['level'] if forecast else None,'probability':prob,
+            'risk':risk,'danger':None,'reference':None,'lat':st['lat'],'lon':st['lon'],'trend_3h_cm':trend,'trend_m3s':trend,
+            'live':current is not None,'simulation':False,'snapshot':False,'status':status,'source':'Copernicus CEMS / GloFAS','source_url':'https://ewds.climate.copernicus.eu/datasets/cems-glofas-forecast',
+            'observed_at':None,'fetched_at':(GLOFAS_CACHE.get('payload') or {}).get('fetched_at'),'forecast15':forecast,'day15':forecast[-1]['level'] if forecast else None,'day15risk':forecast[-1]['risk'] if forecast else 'UNAVAILABLE',
+            'history_points':0,'model_ready':True,'unit':'m3/s','signal_type':'Relative GloFAS high-flow signal'}
 
 def build_dashboard(key):
     if key not in STATIONS:key='mymensingh'
-    z=package_station(key); hist=make_history(key,z['current'])
-    pred,prob,risk,slope=predict_24h(hist,z['current'],z['danger'])
-    if risk=='UNAVAILABLE' and z['current'] is not None:risk=risk_for(z['current'],z['danger'])
-    return {'station':z,'current':z['current'],'predicted':pred,'probability':prob,'risk':risk,'trend_per_3h':slope,
-            'forecast15':z['forecast15'],'history':hist,'advice':advice(risk),'simple':make_simple_summary(z),
-            'live_connected':bool(z['live']),'model':model_status()}
+    z=package_station(key)
+    return {'station':z,'current':z['current'],'predicted':z['predicted'],'probability':z['probability'],'risk':z['risk'],'trend_per_3h':z['trend_m3s'],'forecast15':z['forecast15'],'history':[],'advice':advice(z['risk']),'simple':make_simple_summary(z),'live_connected':z['live'],'model':{'ready':True,'model_name':'GloFAS relative high-flow signal'}}
 
 def advice(risk):
-    if risk=='UNAVAILABLE': return ['Authentic BWDB observation data is currently unavailable for this zone.','No model forecast is shown until real source data is available.','Follow official BWDB/FFWC information for decisions.']
-    return {
-      'NORMAL':['Monitor official updates.','Keep phones and power banks charged.','Know the nearest safe high ground or shelter.'],
-      'WARNING':['Check official and local-authority updates regularly.','Prepare water, dry food, medicines and important documents.','Move valuables and electrical items higher and plan an evacuation route.'],
-      'FLOOD':['Avoid unnecessary travel near rivers and fast-moving water.','Move valuables, documents, livestock and essentials higher.','Prepare for evacuation if local authorities advise it.'],
-      'SEVERE':['Follow local-authority emergency instructions immediately.','Move to higher ground or a designated shelter when instructed.','Keep essential medicines and emergency supplies with you.']
-    }[risk]
+    if risk=='UNAVAILABLE': return ['GloFAS forecast data is currently unavailable for this zone.','FloodGuard will not substitute simulated values.','Follow official Bangladesh flood authorities for decisions.']
+    return {'NORMAL':['Monitor the GloFAS outlook and local conditions.','Keep phones and power banks charged.','Know the nearest safe high ground or shelter.'],'WARNING':['Check the next GloFAS updates and local-authority information regularly.','Prepare water, dry food, medicines and important documents.','Plan an evacuation route if local conditions worsen.'],'FLOOD':['Treat the high-flow signal seriously and monitor official warnings.','Move valuables, documents, livestock and essentials higher.','Avoid unnecessary travel near rivers and fast-moving water.'],'SEVERE':['Treat the forecast as a strong high-flow signal and check official warnings immediately.','Follow local-authority emergency instructions.','Move to higher ground or a designated shelter when instructed.']}[risk]
 
 def make_simple_summary(z):
-    if z['current'] is None or z['danger'] is None: return {'headline':'Authentic source data is currently unavailable for this zone.','sub':'FloodGuard will not substitute simulated or synthetic values.'}
-    gap=z['danger']-z['current']; direction='rising' if (z['trend_3h_cm'] or 0)>0.2 else ('falling' if (z['trend_3h_cm'] or 0)<-0.2 else 'fairly steady')
-    if z['risk']=='SEVERE': headline=f"Severe flood risk near {z['district']}. Water level is {direction} and needs immediate attention."
-    elif z['risk']=='FLOOD': headline=f"Flood conditions are possible in {z['district']}. Water level is {direction}; keep essentials ready."
-    elif z['risk']=='WARNING': headline=f"Flood risk is increasing in {z['district']}. Water level is {direction}; stay alert."
-    else: headline=f"Conditions are currently calmer in {z['district']}. Water level is {direction}; keep monitoring updates."
-    if gap>=0: sub=f"Current level {z['current']:.2f} m; {gap:.2f} m below the reference danger level."
-    else: sub=f"Current level {z['current']:.2f} m; {abs(gap):.2f} m above the reference danger level."
-    return {'headline':headline,'sub':sub}
+    if z['current'] is None: return {'headline':'GloFAS forecast data is currently unavailable for this zone.','sub':'FloodGuard will not substitute simulated or synthetic values.'}
+    direction='rising' if (z['trend_m3s'] or 0)>0 else ('falling' if (z['trend_m3s'] or 0)<0 else 'steady')
+    if z['risk']=='SEVERE': headline=f"Very high relative river-flow signal near {z['district']}. The GloFAS forecast is {direction}."
+    elif z['risk']=='FLOOD': headline=f"High relative river-flow signal near {z['district']}. The GloFAS forecast is {direction}."
+    elif z['risk']=='WARNING': headline=f"River-flow signal is elevated near {z['district']}. The GloFAS forecast is {direction}."
+    else: headline=f"No elevated relative high-flow signal is detected near {z['district']} in the current GloFAS forecast."
+    return {'headline':headline,'sub':f"Forecast discharge: {z['current']:.1f} m³/s. This is a GloFAS discharge signal, not an observed BWDB water level."}
+
+@app.route('/api/live-refresh')
+def live_refresh():
+    snap=_glofas_payload(force=request.args.get('force')=='1')
+    return jsonify({'started':bool(snap),'state':'ready' if snap else 'error','connected':bool(snap),'fetched_at':snap.get('fetched_at') if snap else None,'error':GLOFAS_CACHE.get('error')})
+
+@app.route('/api/live-status')
+def live_status():
+    snap=GLOFAS_CACHE.get('payload')
+    return jsonify({'connected':bool(snap),'state':'ready' if snap else 'idle','source':'Copernicus CEMS / GloFAS','fetched_at':snap.get('fetched_at') if snap else None,'error':GLOFAS_CACHE.get('error')})
 
 @app.route('/')
 def index():
@@ -348,77 +275,50 @@ def national():
     return jsonify({'zones':zones,'counts':counts,'stations':len(zones),'live_stations':sum(z['live'] for z in zones)})
 @app.route('/api/live-refresh')
 def live_refresh():
-    started=trigger_live_refresh(force=request.args.get('force')=='1'); snap=live_snapshot()
-    return jsonify({'started':started,'state':LIVE_CACHE.get('state'),'connected':bool(snap.get('ok')),'fetched_at':snap.get('fetched_at'),'table_date':snap.get('table_date')})
+    snap=_glofas_payload(force=request.args.get('force')=='1')
+    return jsonify({'started':bool(snap),'state':'ready' if snap else 'error','connected':bool(snap),'fetched_at':snap.get('fetched_at') if snap else None,'error':GLOFAS_CACHE.get('error')})
 @app.route('/api/live-status')
 def live_status():
-    snap=live_snapshot(); return jsonify({'connected':bool(snap.get('ok')),'state':LIVE_CACHE.get('state'),'source':snap.get('source'),'fetched_at':snap.get('fetched_at'),'table_date':snap.get('table_date'),'last_attempt':LIVE_CACHE.get('last_attempt'),'error':LIVE_CACHE.get('error')})
+    snap=GLOFAS_CACHE.get('payload'); return jsonify({'connected':bool(snap),'state':'ready' if snap else 'idle','source':'Copernicus CEMS / GloFAS','fetched_at':snap.get('fetched_at') if snap else None,'error':GLOFAS_CACHE.get('error')})
 @app.route('/api/analytics')
 def analytics():
-    zones=[package_station(k) for k in STATIONS]; valid=[z for z in zones if z.get('current') is not None and z.get('danger')]; rising=sorted(valid,key=lambda z:z.get('trend_3h_cm') if z.get('trend_3h_cm') is not None else -999,reverse=True); close=sorted(valid,key=lambda z:z['current']/z['danger'],reverse=True)
-    return jsonify({'counts':{r:sum(z['risk']==r for z in zones) for r in ['NORMAL','WARNING','FLOOD','SEVERE']},'avg_level':round(statistics.mean(z['current'] for z in valid),2) if valid else None,'rising':rising[:6],'closest':close[:6]})
+    zones=[package_station(k) for k in STATIONS]; valid=[z for z in zones if z.get('current') is not None]
+    rising=sorted(valid,key=lambda z:z.get('trend_m3s') if z.get('trend_m3s') is not None else -999,reverse=True)
+    return jsonify({'counts':{r:sum(z['risk']==r for z in zones) for r in ['NORMAL','WARNING','FLOOD','SEVERE']},'avg_discharge_m3s':round(statistics.mean(z['current'] for z in valid),1) if valid else None,'rising':rising[:6],'closest':sorted(valid,key=lambda z:z.get('probability') or 0,reverse=True)[:6]})
 
 @app.get('/api/model-status')
-def api_model_status(): return jsonify(model_status())
+def api_model_status(): return jsonify({'ready':True,'model_name':'GloFAS relative high-flow signal','training_source':'Copernicus GloFAS operational forecast','synthetic_data_used':False,'note':'This is a relative forecast signal, not an official flood warning model.'})
 
 @app.get('/api/data-provenance')
-def data_provenance():
-    return jsonify(source_status())
+def data_provenance(): return jsonify(source_status())
 
-@app.get('/api/research/explainability')
-def research_explainability():
-    return jsonify(explain_model())
-
-@app.get('/api/research/station-mapping')
-def research_station_mapping():
-    from real_data import fetch_bwdb_station_catalog, choose_station
-    rows=[]
-    catalog=fetch_bwdb_station_catalog()
-    for key,st in STATIONS.items():
-        m=choose_station(catalog,st['station'],st['river'],st['lat'],st['lon'])
-        rows.append({'floodguard_station':key,'requested':{'station':st['station'],'river':st['river'],'lat':st['lat'],'lon':st['lon']},'bwdb_match':m})
-    return jsonify({'ok':True,'stations':rows,'catalog_count':len(catalog)})
+@app.get('/api/research/summary')
+def research_summary():
+    zones=[package_station(k) for k in STATIONS]
+    return jsonify({'ok':True,'architecture':'GloFAS-only','source':source_status(),'zones':len(zones),'live_zones':sum(z['live'] for z in zones),'risk_definition':'Relative position within each station 15-day GloFAS forecast; not an official flood threshold.','forecast_horizon_days':15,'ensemble_enabled':True,'historical_validation':'NOT_YET_IMPLEMENTED','synthetic_fallback':False})
 
 @app.get('/api/research/glofas/<station_id>')
 def research_glofas(station_id):
-    if station_id not in STATIONS: return jsonify({'ok':False,'error':'Unknown station'}),404
-    st=STATIONS[station_id]
-    try:
-        path=fetch_glofas_forecast_file(st)
-        series=extract_glofas_series(path,st['lat'],st['lon'])
-        return jsonify({'ok':True,'station':station_id,'source':'Copernicus GloFAS operational forecast','variable':'river_discharge_in_the_last_24_hours','unit':'m3/s','forecast':series})
-    except Exception as exc:
-        return jsonify({'ok':False,'station':station_id,'source':'Copernicus GloFAS operational forecast','error':str(exc)}),502
+    if station_id not in STATIONS:return jsonify({'ok':False,'error':'Unknown station'}),404
+    try:return jsonify(fetch_glofas_forecast(STATIONS,station_id,force=request.args.get('force')=='1'))
+    except Exception as exc:return jsonify({'ok':False,'station':station_id,'source':'Copernicus CEMS / GloFAS','error':str(exc)}),502
 
 @app.post('/api/research/replay')
 def research_replay():
-    data=request.get_json(silent=True) or {}
-    station_id=data.get('station_id','feni')
-    issue_date=data.get('issue_date')
-    if station_id not in STATIONS: return jsonify({'ok':False,'error':'Unknown station'}),400
-    if not issue_date: return jsonify({'ok':False,'error':'issue_date is required'}),400
-    try:
-        z=STATIONS[station_id]
-        result=replay_case(issue_date,z,[],int(data.get('lead_days',15)))
-        return jsonify({'ok':True,'result':result})
-    except Exception as exc:
-        return jsonify({'ok':False,'error':str(exc),'station':station_id,'issue_date':issue_date}),502
+    data=request.get_json(silent=True) or {}; station_id=data.get('station_id','feni'); issue_date=(data.get('issue_date') or '').strip()
+    if station_id not in STATIONS or not issue_date:return jsonify({'ok':False,'error':'station_id and issue_date are required'}),400
+    try:return jsonify(fetch_historical_forecast(STATIONS[station_id],issue_date))
+    except Exception as exc:return jsonify({'ok':False,'error':str(exc),'station':station_id,'issue_date':issue_date}),502
 
 @app.get('/api/research/validation-status')
 def validation_status():
-    p=os.path.join(BASE,'model','real_flood_model.json')
-    if not os.path.exists(p): return jsonify({'status':'NOT_READY','reason':'No authentic trained model artifact exists yet.'})
-    try: return jsonify(json.loads(open(p,encoding='utf-8').read()))
-    except Exception as e: return jsonify({'status':'ERROR','error':str(e)}),500
+    return jsonify({'status':'GLOFAS_ONLY_BASELINE','synthetic_data_used':False,'real_observation_validation':'NOT_AVAILABLE_IN_GLOFAS_ONLY_MODE','next_stage':'Historical GloFAS forecast replay / reforecast skill evaluation'})
 
 @app.get('/api/glofas/<station_id>')
 def glofas_station(station_id):
-    if station_id not in STATIONS: return jsonify({'ok':False,'error':'Unknown station'}),404
-    try:
-        from live_data import fetch_glofas_forecast
-        return jsonify(fetch_glofas_forecast({**STATIONS[station_id],'id':station_id}))
-    except Exception as exc:
-        return jsonify({'ok':False,'error':str(exc),'source':'Copernicus GloFAS'}),503
+    if station_id not in STATIONS:return jsonify({'ok':False,'error':'Unknown station'}),404
+    try:return jsonify(fetch_glofas_forecast(STATIONS,station_id,force=request.args.get('force')=='1'))
+    except Exception as exc:return jsonify({'ok':False,'error':str(exc),'source':'Copernicus GloFAS'}),503
 
 @app.get('/api/hazards/earthquakes')
 def earthquakes():
@@ -566,8 +466,8 @@ def cyclones():
 @app.route('/api/report')
 def report():
     zones=[package_station(k) for k in STATIONS]; now=datetime.now().astimezone().strftime('%d %b %Y, %I:%M:%S %p')
-    lines=['FLOODGUARD BD — FLOOD SITUATION REPORT','',f'Generated: {now}','Only authentic source observations and real-data-trained model outputs are reported.','']
-    for z in zones: lines.append(f"{z['name']} | {z['current']:.2f} m | ref {z['danger']:.2f} m | {z['risk']} | {z['status']}")
+    lines=['FLOODGUARD BD — FLOOD SITUATION REPORT','',f'Generated: {now}','Only authentic Copernicus GloFAS forecast data and derived relative high-flow signals are reported.','']
+    for z in zones: lines.append(f"{z['name']} | {z['current']:.1f} m3/s | relative signal {z['risk']} | {z['status']}")
     return Response('\n'.join(lines),mimetype='text/plain',headers={'Content-Disposition':'attachment; filename="FloodGuard_BD_Situation_Report.txt"'})
 
 @app.post('/api/copilot')
@@ -581,11 +481,11 @@ def copilot():
     if not key: return jsonify({'ok':False,'error':'GEMINI_API_KEY is not configured.'}),503
     z=package_station(station)
     if not z.get('live'):
-        return jsonify({'ok':False,'error':'Authentic BWDB observation data is unavailable for this zone; Copilot will not invent context.'}),503
+        return jsonify({'ok':False,'error':'Authentic GloFAS forecast data is unavailable for this zone; Copilot will not invent context.'}),503
     prompt=("You are FloodGuard BD Copilot. Use ONLY the supplied FloodGuard data. "
             "Do not invent measurements, forecasts, warnings, authorities or sources. "
-            "Clearly distinguish BWDB observed water level from model projection and GloFAS forecast. "
-            "Give concise, safety-conscious decision support and tell the user to follow official BWDB/FFWC instructions.\n\n"
+            "Clearly distinguish GloFAS forecast discharge from any derived relative signal. "
+            "Give concise, safety-conscious decision support and tell the user to follow official Bangladesh emergency authorities. Do not call the GloFAS relative signal an official warning.\n\n"
             f"Station data: {json.dumps(z,ensure_ascii=False)}\nUser question: {question}")
     try:
         import requests

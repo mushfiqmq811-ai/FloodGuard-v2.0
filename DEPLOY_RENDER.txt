@@ -1,6 +1,6 @@
-FLOODGUARD BD — DEPLOYMENT
+FLOODGUARD BD — GLOFAS-ONLY DEPLOYMENT
 
-Build: pip install -r requirements.txt && python train_real_model.py
+Build: pip install -r requirements.txt
 Start: gunicorn --bind 0.0.0.0:$PORT app:app
 
 Required secrets:
@@ -10,7 +10,13 @@ GEMINI_API_KEY
 SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / EMAIL_FROM / SMTP_TLS
 VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_CLAIMS_EMAIL
 
-The service never substitutes synthetic observations. If BWDB or GloFAS is unavailable, the affected data remains explicitly unavailable.
+Data source:
+Copernicus CEMS / GloFAS via EWDS API: https://ewds.climate.copernicus.eu/api
+Dataset: cems-glofas-forecast
+Variable: river_discharge_in_the_last_24_hours
 
-Official GloFAS API base: https://ewds.climate.copernicus.eu/api
-Official BWDB Hydrology portal: https://www.hydrology.bwdb.gov.bd/
+The production data path contains NO synthetic fallback and NO BWDB dependency.
+If GloFAS cannot be reached, the dashboard explicitly reports DATA UNAVAILABLE.
+
+Important scientific definition:
+GloFAS supplies forecast river discharge (m³/s). FloodGuard derives a relative high-flow signal within each zone's forecast window. This is NOT an official Bangladesh flood-warning threshold.

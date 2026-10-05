@@ -1,28 +1,28 @@
-# FloodGuard BD — Real-Data Production Build
+# FloodGuard BD — GloFAS-Only Production Build
 
-This build keeps the existing FloodGuard BD interface and replaces the previous simulated/demo data path with an authentic-source pipeline.
+This build keeps the existing FloodGuard BD visual language while switching the operational data path to one authentic source: Copernicus CEMS / GloFAS. BWDB scraping, synthetic fallback data and fake observed water levels are removed from the production path.
 
-## Data sources
-- **BWDB Hydrology chart pages:** observed water levels are fetched from the official BWDB Hydrology website. The station availability report is used to map FloodGuard zones to published BWDB stations; chart pages are then parsed for observed timestamp/level records.
-- **Copernicus GloFAS / EWDS:** operational forecast access uses the current EWDS API base URL `https://ewds.climate.copernicus.eu/api` and a server-side personal access token.
-- **Model:** the production model is trained only from authentic BWDB observed water-level history. If insufficient real observations are available, training aborts; it never fabricates rows.
-- **Gemini:** optional AI Copilot uses `GEMINI_API_KEY` and is instructed to ground answers only in FloodGuard source data.
-- **Notifications:** SMTP email and browser Web Push are supported.
+## Data architecture
+- **Live/operational source:** Copernicus CEMS / GloFAS via `https://ewds.climate.copernicus.eu/api`
+- **Dataset:** `cems-glofas-forecast`
+- **Variable:** `river_discharge_in_the_last_24_hours`
+- **Unit:** m³/s
+- **Horizon:** 15 days shown in FloodGuard; the source request retrieves 30 days.
+- **Ensemble:** perturbed forecasts are requested so P10/P50/P90 information can be exposed when returned by EWDS.
+- **Historical replay:** the Research endpoint can request the actual operational GloFAS forecast issued on a supplied historical date.
 
-## Important behavior
-There is no synthetic-data fallback in the production data path. If an authentic source cannot be fetched, the affected zone reports `DATA UNAVAILABLE` and the model does not invent a prediction.
+## Risk definition
+FloodGuard does not invent a national danger-level threshold. The current release derives a **relative high-flow signal** from each zone's 15-day GloFAS forecast window. This is transparent experimental decision support, not an official flood warning.
 
-## Local / Render
-Install dependencies, configure the environment variables in `DEPLOY_RENDER.txt`, then run:
+## Research mode
+The dashboard includes a Research page with source provenance, live-zone coverage, scientific status, ensemble evidence and a per-zone GloFAS forecast table.
 
-```bash
-python train_real_model.py
-```
-
-The training script performs a chronological holdout evaluation and writes the real-data-trained model to `model/real_flood_model.joblib` plus metadata. Generated model artifacts are ignored by Git until explicitly added.
-
-Run the web app with:
+## Deployment
+Set the environment variables in `DEPLOY_RENDER.txt`, then deploy with:
 
 ```bash
+pip install -r requirements.txt
 gunicorn --bind 0.0.0.0:$PORT app:app
 ```
+
+No training command is required at Render build time.
