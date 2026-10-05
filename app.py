@@ -4,6 +4,9 @@ from datetime import datetime, timedelta, timezone
 import math, threading, time, statistics, os, sqlite3, re, smtplib, urllib.parse, json
 from live_data import fetch_ffwc_current
 from model import predict_flood, model_status
+from explainability import explain_model
+from real_data import source_status, fetch_glofas_forecast_file, extract_glofas_series
+from historical_replay import replay_case
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE, 'floodguard.db')
@@ -352,16 +355,61 @@ def live_status():
     snap=live_snapshot(); return jsonify({'connected':bool(snap.get('ok')),'state':LIVE_CACHE.get('state'),'source':snap.get('source'),'fetched_at':snap.get('fetched_at'),'table_date':snap.get('table_date'),'last_attempt':LIVE_CACHE.get('last_attempt'),'error':LIVE_CACHE.get('error')})
 @app.route('/api/analytics')
 def analytics():
-    zones=[package_station(k) for k in STATIONS]; rising=sorted(zones,key=lambda z:z['trend_3h_cm'],reverse=True); close=sorted(zones,key=lambda z:z['current']/z['danger'],reverse=True)
-    return jsonify({'counts':{r:sum(z['risk']==r for z in zones) for r in ['NORMAL','WARNING','FLOOD','SEVERE']},'avg_level':round(statistics.mean(z['current'] for z in zones),2),'rising':rising[:6],'closest':close[:6]})
+    zones=[package_station(k) for k in STATIONS]; valid=[z for z in zones if z.get('current') is not None and z.get('danger')]; rising=sorted(valid,key=lambda z:z.get('trend_3h_cm') if z.get('trend_3h_cm') is not None else -999,reverse=True); close=sorted(valid,key=lambda z:z['current']/z['danger'],reverse=True)
+    return jsonify({'counts':{r:sum(z['risk']==r for z in zones) for r in ['NORMAL','WARNING','FLOOD','SEVERE']},'avg_level':round(statistics.mean(z['current'] for z in valid),2) if valid else None,'rising':rising[:6],'closest':close[:6]})
 
 @app.get('/api/model-status')
 def api_model_status(): return jsonify(model_status())
 
 @app.get('/api/data-provenance')
 def data_provenance():
-    from real_data import source_status
     return jsonify(source_status())
+
+@app.get('/api/research/explainability')
+def research_explainability():
+    return jsonify(explain_model())
+
+@app.get('/api/research/station-mapping')
+def research_station_mapping():
+    from real_data import fetch_bwdb_station_catalog, choose_station
+    rows=[]
+    catalog=fetch_bwdb_station_catalog()
+    for key,st in STATIONS.items():
+        m=choose_station(catalog,st['station'],st['river'],st['lat'],st['lon'])
+        rows.append({'floodguard_station':key,'requested':{'station':st['station'],'river':st['river'],'lat':st['lat'],'lon':st['lon']},'bwdb_match':m})
+    return jsonify({'ok':True,'stations':rows,'catalog_count':len(catalog)})
+
+@app.get('/api/research/glofas/<station_id>')
+def research_glofas(station_id):
+    if station_id not in STATIONS: return jsonify({'ok':False,'error':'Unknown station'}),404
+    st=STATIONS[station_id]
+    try:
+        path=fetch_glofas_forecast_file(st)
+        series=extract_glofas_series(path,st['lat'],st['lon'])
+        return jsonify({'ok':True,'station':station_id,'source':'Copernicus GloFAS operational forecast','variable':'river_discharge_in_the_last_24_hours','unit':'m3/s','forecast':series})
+    except Exception as exc:
+        return jsonify({'ok':False,'station':station_id,'source':'Copernicus GloFAS operational forecast','error':str(exc)}),502
+
+@app.post('/api/research/replay')
+def research_replay():
+    data=request.get_json(silent=True) or {}
+    station_id=data.get('station_id','feni')
+    issue_date=data.get('issue_date')
+    if station_id not in STATIONS: return jsonify({'ok':False,'error':'Unknown station'}),400
+    if not issue_date: return jsonify({'ok':False,'error':'issue_date is required'}),400
+    try:
+        z=STATIONS[station_id]
+        result=replay_case(issue_date,z,[],int(data.get('lead_days',15)))
+        return jsonify({'ok':True,'result':result})
+    except Exception as exc:
+        return jsonify({'ok':False,'error':str(exc),'station':station_id,'issue_date':issue_date}),502
+
+@app.get('/api/research/validation-status')
+def validation_status():
+    p=os.path.join(BASE,'model','real_flood_model.json')
+    if not os.path.exists(p): return jsonify({'status':'NOT_READY','reason':'No authentic trained model artifact exists yet.'})
+    try: return jsonify(json.loads(open(p,encoding='utf-8').read()))
+    except Exception as e: return jsonify({'status':'ERROR','error':str(e)}),500
 
 @app.get('/api/glofas/<station_id>')
 def glofas_station(station_id):

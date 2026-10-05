@@ -1,193 +1,169 @@
-"""Authentic-data ingestion for FloodGuard BD.
+"""Authentic BWDB Hydrology + Copernicus EWDS ingestion.
 
-No synthetic values are generated here. A source failure is represented as an
-error/unavailable state. BWDB Hydrology chart pages are scraped for observed
-water-level series; Copernicus EWDS/GloFAS is used for forecast/historical
-river-discharge data.
+Rules:
+- Never fabricate observations or forecasts.
+- BWDB water levels are observations only when extracted from an official chart/data response.
+- GloFAS is river discharge forecast data; it is never relabelled as observed stage.
 """
 from __future__ import annotations
-import json, os, re, sqlite3, time
+import json, os, re, time
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from html import unescape
-from urllib.parse import urlencode
+from urllib.parse import urljoin, urlparse
 import requests
 
-BWDB_AVAILABILITY_URL = os.getenv(
-    "BWDB_AVAILABILITY_URL",
-    "https://www.hydrology.bwdb.gov.bd/includes/water_level_data_available_print.php?dist=&river="
-)
-BWDB_RT_AVAILABILITY_URL = os.getenv(
-    "BWDB_RT_AVAILABILITY_URL",
-    "https://www.hydrology.bwdb.gov.bd/includes/water_level_rt_data_available_print.php?dist=&river="
-)
-BWDB_CHART_TEMPLATE = os.getenv(
-    "BWDB_CHART_URL_TEMPLATE",
-    "https://www.hydrology.bwdb.gov.bd/index.php?pagetitle=water_level&sub4={sl}&SUBID=131&id=125&id2=126&id3=308"
-)
-EWDS_API_URL = os.getenv("CDS_API_URL", "https://ewds.climate.copernicus.eu/api").rstrip("/")
-GLOFAS_HISTORICAL_DATASET = "cems-glofas-historical"
-STATION_CATALOG_TTL = int(os.getenv("BWDB_CATALOG_CACHE_SECONDS", "3600"))
-TIMEOUT = int(os.getenv("SOURCE_HTTP_TIMEOUT", "25"))
-USER_AGENT = "FloodGuard-BD/5.0 (research data collector)"
+BWDB_BASE="https://www.hydrology.bwdb.gov.bd/"
+BWDB_AVAILABILITY_URL=os.getenv("BWDB_AVAILABILITY_URL",BWDB_BASE+"includes/water_level_data_available_print.php?dist=&river=")
+BWDB_RT_AVAILABILITY_URL=os.getenv("BWDB_RT_AVAILABILITY_URL",BWDB_BASE+"includes/water_level_rt_data_available_print.php?dist=&river=")
+BWDB_CHART_TEMPLATE=os.getenv("BWDB_CHART_URL_TEMPLATE",BWDB_BASE+"index.php?pagetitle=water_level&sub4={sl}&SUBID=131&id=125&id2=126&id3=308")
+EWDS_API_URL=os.getenv("CDS_API_URL","https://ewds.climate.copernicus.eu/api").rstrip("/")
+TIMEOUT=int(os.getenv("SOURCE_HTTP_TIMEOUT","25"))
+UA="FloodGuard-BD/6.0 (research data collector)"
+_CATALOG={"value":None,"expires":0.0}
 
 
-def _norm(v):
-    return re.sub(r"[^a-z0-9]+", "", str(v or "").lower())
+def _norm(v): return re.sub(r"[^a-z0-9]+","",str(v or "").lower())
+def _clean(s): return re.sub(r"\s+"," ",re.sub(r"<[^>]+>"," ",s or "")).strip()
 
+def _get(url, **kw):
+    h={"User-Agent":UA,"Accept":"text/html,application/json,*/*"}; h.update(kw.pop("headers",{}))
+    r=requests.get(url,timeout=TIMEOUT,headers=h,**kw); r.raise_for_status(); return r
 
-def _clean_html_cell(s):
-    s = re.sub(r"<[^>]+>", " ", s or "")
-    return re.sub(r"\s+", " ", unescape(s)).strip()
-
-
-_CATALOG = {"value": None, "expires": 0.0}
-
-
-def fetch_bwdb_station_catalog():
-    """Read BWDB's published availability report; cache only the official response."""
-    import time
-    now = time.time()
-    if _CATALOG["value"] is not None and now < _CATALOG["expires"]:
-        return _CATALOG["value"]
-    r = requests.get(BWDB_AVAILABILITY_URL, timeout=TIMEOUT, headers={"User-Agent": USER_AGENT})
-    r.raise_for_status()
-    rows = []
-    for raw in re.findall(r"<tr[^>]*>(.*?)</tr>", r.text, re.I | re.S):
-        cells = [_clean_html_cell(x) for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", raw, re.I | re.S)]
-        if len(cells) < 9 or not re.match(r"^\d+$", cells[0]):
-            continue
+def fetch_bwdb_station_catalog(force=False):
+    now=time.time()
+    if not force and _CATALOG["value"] and now<_CATALOG["expires"]: return _CATALOG["value"]
+    r=_get(BWDB_AVAILABILITY_URL)
+    rows=[]
+    for raw in re.findall(r"<tr[^>]*>(.*?)</tr>",r.text,re.I|re.S):
+        cells=[_clean(x) for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>",raw,re.I|re.S)]
+        if len(cells)<9 or not cells[0].isdigit(): continue
         try:
-            rows.append({
-                "sl": int(cells[0]), "station_id": cells[1], "station": cells[2], "river": cells[3],
-                "tidal_status": cells[4], "district": cells[5], "upazila": cells[6],
-                "lat": float(cells[7]), "lon": float(cells[8]),
-                "first_date": cells[9] if len(cells) > 9 else None,
-                "last_date": cells[10] if len(cells) > 10 else None,
-            })
-        except (ValueError, TypeError):
-            continue
-    if not rows:
-        raise RuntimeError("BWDB station availability page returned no parseable stations")
-    _CATALOG.update(value=rows, expires=now + STATION_CATALOG_TTL)
+            rows.append({"sl":int(cells[0]),"station_id":cells[1],"station":cells[2],"river":cells[3],"tidal_status":cells[4],"district":cells[5],"upazila":cells[6],"lat":float(cells[7]),"lon":float(cells[8]),"first_date":cells[9] if len(cells)>9 else None,"last_date":cells[10] if len(cells)>10 else None})
+        except (ValueError,TypeError): pass
+    if not rows: raise RuntimeError("BWDB availability report returned no parseable stations")
+    _CATALOG.update(value=rows,expires=now+int(os.getenv("BWDB_CATALOG_CACHE_SECONDS","3600")))
     return rows
 
-def choose_station(catalog, target_station, target_river, target_lat, target_lon):
-    """Choose a BWDB station by name/river first, then geography; never fabricate a station."""
-    best, best_score = None, -1e9
+def choose_station(catalog,target_station,target_river,target_lat,target_lon):
+    best=None; best_score=-1
     for s in catalog:
-        name_score = SequenceMatcher(None, _norm(target_station), _norm(s["station"])).ratio()
-        river_score = SequenceMatcher(None, _norm(target_river), _norm(s["river"])).ratio()
-        dist = ((float(s["lat"])-target_lat)**2 + (float(s["lon"])-target_lon)**2) ** 0.5
-        geo_score = max(0.0, 1.0 - dist / 2.0)
-        score = name_score * 0.55 + river_score * 0.30 + geo_score * 0.15
-        if score > best_score:
-            best, best_score = s, score
-    if not best or best_score < 0.48:
-        return None
-    return {**best, "match_score": round(best_score, 4), "chart_url": BWDB_CHART_TEMPLATE.format(sl=best["sl"])}
+        ns=SequenceMatcher(None,_norm(target_station),_norm(s["station"])).ratio()
+        nr=SequenceMatcher(None,_norm(target_river),_norm(s["river"])).ratio()
+        d=((s["lat"]-target_lat)**2+(s["lon"]-target_lon)**2)**0.5
+        geo=max(0,1-d/2)
+        score=.55*ns+.30*nr+.15*geo
+        if score>best_score: best,best_score=s,score
+    if not best or best_score<.48: return None
+    return {**best,"match_score":round(best_score,4),"chart_url":BWDB_CHART_TEMPLATE.format(sl=best["sl"])}
 
-
-def _extract_pairs_from_js(text):
-    """Extract common Highcharts/Chart.js/Google-chart style date/value arrays."""
-    pairs = []
-    # Explicit [date,value] rows.
-    for m in re.finditer(r"\[\s*['\"]?(\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?)['\"]?\s*,\s*(-?\d+(?:\.\d+)?)\s*\]", text):
-        pairs.append((m.group(1), float(m.group(2))))
-    # Common JS objects: {date:'...', value:7.2} / {x:'...', y:7.2}
-    for m in re.finditer(r"\{[^{}]{0,300}?(?:date|time|datetime|x)\s*:\s*['\"]([^'\"]+)['\"][^{}]{0,200}?(?:value|level|water_level|waterlevel|y)\s*:\s*(-?\d+(?:\.\d+)?)[^{}]*\}", text, re.I):
-        pairs.append((m.group(1), float(m.group(2))))
-    return pairs
-
-
-def parse_bwdb_chart(text):
-    """Parse an authentic BWDB chart page. Supports tables, embedded rows and common JS chart payloads."""
-    pairs = _extract_pairs_from_js(text)
-    # HTML table records.
-    for raw in re.findall(r"<tr[^>]*>(.*?)</tr>", text, re.I | re.S):
-        cells = [_clean_html_cell(x) for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", raw, re.I | re.S)]
-        if not cells: continue
-        date_idx = next((i for i,c in enumerate(cells) if re.search(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", c)), None)
-        if date_idx is None: continue
-        nums=[]
-        for c in cells[date_idx+1:]:
-            try: nums.append(float(c.replace(",", "")))
-            except ValueError: pass
-        if nums: pairs.append((cells[date_idx], nums[-1]))
-    # De-duplicate and validate physical numeric bounds without inventing values.
-    out=[]; seen=set()
-    for ts, level in pairs:
-        key=(str(ts).strip(), round(float(level), 6))
-        if key in seen or not (-20 < float(level) < 100): continue
-        seen.add(key)
+def _parse_date(s):
+    s=str(s).strip().replace("/","-")
+    for fmt in (None,"%d-%m-%Y","%d-%m-%Y %H:%M","%d-%m-%Y %H:%M:%S","%Y-%m-%d","%Y-%m-%d %H:%M","%Y-%m-%d %H:%M:%S"):
         try:
-            dt = datetime.fromisoformat(str(ts).replace("/", "-").replace("Z", "+00:00"))
-            if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
-            iso = dt.astimezone(timezone.utc).isoformat()
-        except ValueError:
-            iso = str(ts).strip()
-        out.append({"observed_at": iso, "water_level_m": float(level)})
-    out.sort(key=lambda x: x["observed_at"])
+            dt=datetime.fromisoformat(s) if fmt is None else datetime.strptime(s,fmt)
+            if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).isoformat()
+        except Exception: pass
+    return None
+
+def _pairs(text):
+    out=[]
+    # JSON/JS pair objects and arrays, including numeric timestamps.
+    patterns=[
+      r"[\[\(]\s*['\"]?([^'\"\]\),]+?)['\"]?\s*[,;:]\s*(-?\d+(?:\.\d+)?)\s*[\]\)]",
+      r"(?:date|datetime|time|timestamp|x)\s*[:=]\s*['\"]([^'\"]+)['\"][\s,}]{0,200}(?:value|level|water[_ ]?level|waterlevel|y)\s*[:=]\s*(-?\d+(?:\.\d+)?)",
+      r"(?:value|level|water[_ ]?level|waterlevel|y)\s*[:=]\s*(-?\d+(?:\.\d+)?)[\s,}]{0,200}(?:date|datetime|time|timestamp|x)\s*[:=]\s*['\"]([^'\"]+)['\"]"
+    ]
+    for i,p in enumerate(patterns):
+        for m in re.finditer(p,text,re.I):
+            a,b=m.group(1),m.group(2)
+            if i==2: a,b=b,a
+            ts=_parse_date(a)
+            if ts:
+                try: v=float(b); out.append((ts,v))
+                except ValueError: pass
     return out
 
+def parse_bwdb_chart(text):
+    pairs=_pairs(text)
+    # HTML tables with a date-like cell followed by a numeric level.
+    for raw in re.findall(r"<tr[^>]*>(.*?)</tr>",text,re.I|re.S):
+        cells=[_clean(x) for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>",raw,re.I|re.S)]
+        for i,c in enumerate(cells):
+            ts=_parse_date(c)
+            if not ts: continue
+            for n in reversed(cells[i+1:]):
+                try:
+                    v=float(n.replace(",",""))
+                    if -20<v<100: pairs.append((ts,v)); break
+                except ValueError: pass
+    seen=set(); out=[]
+    for ts,v in sorted(pairs):
+        key=(ts,round(v,6))
+        if key in seen or not (-20<v<100): continue
+        seen.add(key); out.append({"observed_at":ts,"water_level_m":float(v)})
+    return out
+
+def _discover_embedded_urls(page_url,text):
+    urls=[]
+    for m in re.finditer(r"(?:src|href)\s*=\s*['\"]([^'\"]+)['\"]",text,re.I):
+        u=urljoin(page_url,m.group(1))
+        low=u.lower()
+        if any(k in low for k in ("water","level","chart","graph","ajax","data")): urls.append(u)
+    for m in re.finditer(r"(?:url|endpoint|ajax|dataUrl|dataurl)\s*[:=]\s*['\"]([^'\"]+)['\"]",text,re.I):
+        urls.append(urljoin(page_url,m.group(1)))
+    return list(dict.fromkeys(urls))[:30]
 
 def fetch_bwdb_chart(url):
-    r = requests.get(url, timeout=TIMEOUT, headers={"User-Agent": USER_AGENT})
-    r.raise_for_status()
-    rows = parse_bwdb_chart(r.text)
-    if not rows:
-        raise RuntimeError("BWDB chart page was reachable but no chart/table observations could be parsed")
-    return rows
+    r=_get(url); rows=parse_bwdb_chart(r.text)
+    if rows: return rows
+    # Many BWDB pages render the chart from a secondary JS/AJAX payload.
+    for u in _discover_embedded_urls(url,r.text):
+        try:
+            rr=_get(u,headers={"Referer":url,"Accept":"application/json,text/plain,*/*"})
+            rows=parse_bwdb_chart(rr.text)
+            if rows: return rows
+        except Exception: continue
+    # Some pages expose arrays of labels and values separately.
+    labels=re.findall(r"(?:categories|labels)\s*[:=]\s*\[([^\]]+)\]",r.text,re.I|re.S)
+    values=re.findall(r"(?:data|values)\s*[:=]\s*\[([^\]]+)\]",r.text,re.I|re.S)
+    for la,va in zip(labels,values):
+        ls=[x.strip().strip("'\"") for x in la.split(",")]; vs=re.findall(r"-?\d+(?:\.\d+)?",va)
+        for a,b in zip(ls,vs):
+            ts=_parse_date(a)
+            if ts: rows.append({"observed_at":ts,"water_level_m":float(b)})
+    if not rows: raise RuntimeError("BWDB chart page reachable but no observation payload could be parsed")
+    return sorted(rows,key=lambda x:x["observed_at"])
 
-
-def fetch_glofas_historical_daily(lat, lon, start_date, end_date, output_dir):
-    """Download real GloFAS historical data through the current EWDS API client.
-
-    This function intentionally fails if credentials/licence access are missing; it never
-    substitutes artificial discharge values.
-    """
-    key = os.getenv("CDS_API_KEY", "").strip()
-    if not key:
-        raise RuntimeError("CDS_API_KEY is required for authentic GloFAS historical data")
-    try:
-        import cdsapi
-    except ImportError as exc:
-        raise RuntimeError("cdsapi is required for authentic GloFAS historical data") from exc
-    os.makedirs(output_dir, exist_ok=True)
-    target = os.path.join(output_dir, f"glofas_{start_date}_{end_date}_{lat:.3f}_{lon:.3f}.grib")
-    if os.path.exists(target) and os.path.getsize(target) > 0:
-        return target
-    client = cdsapi.Client(url=EWDS_API_URL, key=key, quiet=True)
-    req = {
-        "system_version": [os.getenv("GLOFAS_HISTORICAL_SYSTEM_VERSION", "version_5_0")],
-        "hydrological_model": ["lisflood"],
-        "product_type": ["consolidated"],
-        "variable": ["river_discharge_in_the_last_24_hours"],
-        "hyear": sorted(set(d[:4] for d in _date_range(start_date, end_date))),
-        "hmonth": sorted(set(d[5:7] for d in _date_range(start_date, end_date))),
-        "hday": sorted(set(d[8:10] for d in _date_range(start_date, end_date))),
-        "data_format": "grib2",
-        "download_format": "unarchived",
-        "geographical_area": [float(lat)+0.05, float(lon)-0.05, float(lat)-0.05, float(lon)+0.05],
-    }
-    client.retrieve(GLOFAS_HISTORICAL_DATASET, req, target)
-    if not os.path.exists(target) or os.path.getsize(target) == 0:
-        raise RuntimeError("GloFAS historical request completed without a data file")
+def fetch_glofas_forecast_file(station,target_dir="/tmp"):
+    key=os.getenv("CDS_API_KEY","").strip()
+    if not key: raise RuntimeError("CDS_API_KEY is not configured")
+    import cdsapi
+    import tempfile
+    os.makedirs(target_dir,exist_ok=True)
+    target=os.path.join(target_dir,f"glofas_{station['id']}.nc")
+    client=cdsapi.Client(url=EWDS_API_URL,key=key,quiet=True)
+    req={"system_version":["operational"],"hydrological_model":["lisflood"],"product_type":["control_forecast"],"variable":["river_discharge_in_the_last_24_hours"],"leadtime_hour":[str(h) for h in range(24,721,24)],"geographical_area":[station['lat']+.1,station['lon']-.1,station['lat']-.1,station['lon']+.1],"data_format":"netcdf4","download_format":"unarchived"}
+    client.retrieve("cems-glofas-forecast",req,target)
+    if not os.path.exists(target) or os.path.getsize(target)==0: raise RuntimeError("GloFAS request returned no file")
     return target
 
-
-def _date_range(start_date, end_date):
-    from datetime import date, timedelta
-    a=date.fromisoformat(start_date); b=date.fromisoformat(end_date)
-    while a <= b:
-        yield a.isoformat(); a += timedelta(days=1)
-
+def extract_glofas_series(path,lat,lon):
+    import xarray as xr
+    ds=xr.open_dataset(path)
+    try:
+        lat_name=next((n for n in ds.coords if n.lower() in ("latitude","lat")),None)
+        lon_name=next((n for n in ds.coords if n.lower() in ("longitude","lon")),None)
+        time_name=next((n for n in ds.coords if "time" in n.lower()),None)
+        var=next((v for v in ds.data_vars if "discharge" in v.lower()),None)
+        if not all((lat_name,lon_name,time_name,var)): raise RuntimeError("Unrecognized GloFAS NetCDF structure")
+        da=ds[var].sel({lat_name:lat,lon_name:lon},method="nearest").squeeze()
+        vals=[]
+        for t,v in zip(ds[time_name].values,da.values):
+            try: vals.append({"forecast_time":str(t),"discharge_m3s":float(v)})
+            except Exception: pass
+        return vals
+    finally: ds.close()
 
 def source_status():
-    return {
-        "bwdb_chart_source": BWDB_AVAILABILITY_URL,
-        "bwdb_chart_template": BWDB_CHART_TEMPLATE,
-        "glofas_api": EWDS_API_URL,
-        "glofas_dataset": GLOFAS_HISTORICAL_DATASET,
-        "authentic_only": True,
-    }
+    return {"authentic_only":True,"bwdb_availability_url":BWDB_AVAILABILITY_URL,"bwdb_chart_template":BWDB_CHART_TEMPLATE,"glofas_api":EWDS_API_URL,"glofas_forecast_dataset":"cems-glofas-forecast","glofas_variable":"river_discharge_in_the_last_24_hours"}
