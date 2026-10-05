@@ -248,16 +248,6 @@ def make_simple_summary(z):
     else: headline=f"No elevated relative high-flow signal is detected near {z['district']} in the current GloFAS forecast."
     return {'headline':headline,'sub':f"Forecast discharge: {z['current']:.1f} m³/s. This is a GloFAS discharge signal, not an observed BWDB water level."}
 
-@app.route('/api/live-refresh')
-def live_refresh():
-    snap=_glofas_payload(force=request.args.get('force')=='1')
-    return jsonify({'started':bool(snap),'state':'ready' if snap else 'error','connected':bool(snap),'fetched_at':snap.get('fetched_at') if snap else None,'error':GLOFAS_CACHE.get('error')})
-
-@app.route('/api/live-status')
-def live_status():
-    snap=GLOFAS_CACHE.get('payload')
-    return jsonify({'connected':bool(snap),'state':'ready' if snap else 'idle','source':'Copernicus CEMS / GloFAS','fetched_at':snap.get('fetched_at') if snap else None,'error':GLOFAS_CACHE.get('error')})
-
 @app.route('/')
 def index():
     # Serve the root index.html directly so deployment does not depend on templates/ being uploaded.
