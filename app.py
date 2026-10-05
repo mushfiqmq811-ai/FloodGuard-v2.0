@@ -1,7 +1,7 @@
 from flask import Flask, render_template, jsonify, request, Response, session, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta, timezone
-import math, threading, time, statistics, os, sqlite3, re, smtplib, urllib.parse, json
+import math, threading, time, statistics, os, sqlite3, re, urllib.parse, json
 from real_data import source_status, fetch_glofas_forecast, fetch_station_ensemble, live_snapshot, fetch_historical_forecast
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -13,26 +13,12 @@ app.secret_key = os.environ.get('SECRET_KEY', 'floodguard-dev-secret-change-me')
 
 # Representative GloFAS grid zones. Coordinates identify the nearest GloFAS river-grid cell; they are not Bangladesh gauge stations.
 STATIONS = {
- 'mymensingh': {'name':'Mymensingh — Old Brahmaputra','district':'Mymensingh','division':'Mymensingh','river':'Old Brahmaputra','station':'Mymensingh','lat':24.747,'lon':90.420},
- 'jamalpur': {'name':'Jamalpur — Old Brahmaputra','district':'Jamalpur','division':'Mymensingh','river':'Old Brahmaputra','station':'Jamalpur','lat':24.937,'lon':89.937},
- 'tangail': {'name':'Tangail — Dhaleshwari','district':'Tangail','division':'Dhaka','river':'Dhaleshwari','station':'Tangail','lat':24.251,'lon':89.916},
- 'sylhet': {'name':'Sylhet — Surma','district':'Sylhet','division':'Sylhet','river':'Surma','station':'Sylhet','lat':24.895,'lon':91.869},
- 'sunamganj': {'name':'Sunamganj — Surma','district':'Sunamganj','division':'Sylhet','river':'Surma','station':'Sunamganj','lat':25.066,'lon':91.395},
- 'netrokona': {'name':'Netrokona — Kangsha','district':'Netrokona','division':'Mymensingh','river':'Kangsha','station':'Netrokona','lat':24.883,'lon':90.727},
- 'kurigram': {'name':'Kurigram — Dharla','district':'Kurigram','division':'Rangpur','river':'Dharla','station':'Kurigram','lat':25.805,'lon':89.636},
- 'gaibandha': {'name':'Gaibandha — Ghaghat','district':'Gaibandha','division':'Rangpur','river':'Ghaghat','station':'Gaibandha','lat':25.329,'lon':89.542},
- 'nilphamari': {'name':'Nilphamari — Teesta','district':'Nilphamari','division':'Rangpur','river':'Teesta','station':'Nilphamari','lat':25.932,'lon':88.856},
- 'sirajganj': {'name':'Sirajganj — Jamuna','district':'Sirajganj','division':'Rajshahi','river':'Jamuna','station':'Sirajganj','lat':24.453,'lon':89.700},
- 'bogura': {'name':'Bogura — Karatoya','district':'Bogura','division':'Rajshahi','river':'Karatoya','station':'Bogura','lat':24.849,'lon':89.374},
- 'rajshahi': {'name':'Rajshahi — Padma','district':'Rajshahi','division':'Rajshahi','river':'Padma','station':'Rajshahi','lat':24.374,'lon':88.604},
- 'chapainawabganj': {'name':'Chapainawabganj — Mahananda','district':'Chapainawabganj','division':'Rajshahi','river':'Mahananda','station':'Chapainawabganj','lat':24.596,'lon':88.277},
- 'faridpur': {'name':'Faridpur — Padma','district':'Faridpur','division':'Dhaka','river':'Padma','station':'Faridpur','lat':23.607,'lon':89.842},
- 'madaripur': {'name':'Madaripur — Arial Khan','district':'Madaripur','division':'Dhaka','river':'Arial Khan','station':'Madaripur','lat':23.165,'lon':90.195},
- 'barishal': {'name':'Barishal — Kirtankhola','district':'Barishal','division':'Barishal','river':'Kirtankhola','station':'Barishal','lat':22.701,'lon':90.353},
- 'khulna': {'name':'Khulna — Rupsa','district':'Khulna','division':'Khulna','river':'Rupsa','station':'Khulna','lat':22.845,'lon':89.540},
- 'jessore': {'name':'Jashore — Bhairab','district':'Jashore','division':'Khulna','river':'Bhairab','station':'Jashore','lat':23.167,'lon':89.216},
- 'chattogram': {'name':'Chattogram — Karnaphuli','district':'Chattogram','division':'Chattogram','river':'Karnaphuli','station':'Chattogram','lat':22.356,'lon':91.783},
- 'feni': {'name':'Feni — Muhuri','district':'Feni','division':'Chattogram','river':'Muhuri','station':'Feni','lat':23.015,'lon':91.396},
+ 'sylhet': {'name':'Sylhet Region — GloFAS Point','district':'Sylhet','division':'Sylhet','river':'Surma basin','station':'GloFAS grid point','lat':24.895,'lon':91.869},
+ 'kurigram': {'name':'Kurigram Region — GloFAS Point','district':'Kurigram','division':'Rangpur','river':'Dharla basin','station':'GloFAS grid point','lat':25.805,'lon':89.636},
+ 'sirajganj': {'name':'Sirajganj Region — GloFAS Point','district':'Sirajganj','division':'Rajshahi','river':'Jamuna basin','station':'GloFAS grid point','lat':24.453,'lon':89.700},
+ 'rajshahi': {'name':'Rajshahi Region — GloFAS Point','district':'Rajshahi','division':'Rajshahi','river':'Padma basin','station':'GloFAS grid point','lat':24.374,'lon':88.604},
+ 'faridpur': {'name':'Faridpur Region — GloFAS Point','district':'Faridpur','division':'Dhaka','river':'Padma basin','station':'GloFAS grid point','lat':23.607,'lon':89.842},
+ 'feni': {'name':'Feni Region — GloFAS Point','district':'Feni','division':'Chattogram','river':'Muhuri basin','station':'GloFAS grid point','lat':23.015,'lon':91.396},
 }
 
 # No embedded bulletin/snapshot fallback. Source data must be fetched authentically.
@@ -63,10 +49,10 @@ init_db()
 # ---------- Notification engine ----------
 _ALERT_THREAD_STARTED=False
 def _smtp_configured():
-    # SMTP_HOST defaults to Gmail-compatible SMTP when SMTP credentials exist.
-    return bool(os.environ.get('SMTP_USER') and os.environ.get('SMTP_PASS') and (os.environ.get('EMAIL_FROM') or os.environ.get('SMTP_USER')))
+    # Render Free blocks outbound SMTP ports; use the HTTP webhook path instead.
+    return False
 
-def _email_configured(): return bool(os.environ.get('EMAIL_SCRIPT_URL') or _smtp_configured())
+def _email_configured(): return bool(os.environ.get('EMAIL_SCRIPT_URL'))
 def _whatsapp_bridge_configured(): return False
 
 def _send_email(to_email, subject, body):
@@ -79,15 +65,7 @@ def _send_email(to_email, subject, body):
             if 200 <= r.status_code < 300: return True, 'sent via email webhook'
             return False, f'Email webhook HTTP {r.status_code}'
         except Exception as exc: return False, str(exc)
-    if not _smtp_configured(): return False, 'Email is not configured. Set EMAIL_SCRIPT_URL or SMTP_USER/SMTP_PASS.'
-    try:
-        host=os.environ.get('SMTP_HOST','smtp.gmail.com'); port=int(os.environ.get('SMTP_PORT','587')); user=os.environ['SMTP_USER']; pw=os.environ['SMTP_PASS']; sender=os.environ.get('EMAIL_FROM',user)
-        msg=f"From: {sender}\r\nTo: {to_email}\r\nSubject: {subject}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n{body}"
-        with smtplib.SMTP(host,port,timeout=15) as server:
-            if os.environ.get('SMTP_TLS','true').lower()=='true': server.starttls()
-            server.login(user,pw); server.sendmail(sender,[to_email],msg.encode('utf-8'))
-        return True, 'sent via SMTP'
-    except Exception as exc: return False, str(exc)
+    return False, 'Email backend is not configured. Set EMAIL_SCRIPT_URL.'
 
 def _send_whatsapp(number, body):
     return False, 'WhatsApp delivery is not enabled in the real-data-only build.'
@@ -158,7 +136,7 @@ def dispatch_alerts():
     con=db(); users=con.execute('SELECT * FROM users WHERE alerts=1').fetchall(); con.close(); results=[]
     for row in users:
         try:
-            z=package_station(row['zone'] if row['zone'] in STATIONS else 'mymensingh')
+            z=package_station(row['zone'] if row['zone'] in STATIONS else 'sylhet')
             if z.get('risk')=='UNAVAILABLE':
                 results.append({'sent':False,'skipped':'authentic_data_unavailable','zone':z.get('id')}); continue
             state=_get_alert_state(row['id'])
@@ -208,16 +186,26 @@ def _glofas_payload(force=False):
 
 _GLOFAS_THREAD=None
 _GLOFAS_FETCHING=False
+_GLOFAS_FETCH_STARTED_AT=None
+_GLOFAS_FETCH_FINISHED_AT=None
 
 def _start_glofas_fetch(force=False):
     global _GLOFAS_THREAD,_GLOFAS_FETCHING
     if _GLOFAS_FETCHING and _GLOFAS_THREAD and _GLOFAS_THREAD.is_alive():
         return False
     def worker():
-        global _GLOFAS_FETCHING
+        global _GLOFAS_FETCHING, _GLOFAS_FETCH_STARTED_AT, _GLOFAS_FETCH_FINISHED_AT
         _GLOFAS_FETCHING=True
-        try:_glofas_payload(force=force)
-        finally:_GLOFAS_FETCHING=False
+        _GLOFAS_FETCH_STARTED_AT=time.time()
+        _GLOFAS_FETCH_FINISHED_AT=None
+        try:
+            payload=_glofas_payload(force=force)
+            if payload and payload.get('stations'):
+                try: dispatch_alerts()
+                except Exception: pass
+        finally:
+            _GLOFAS_FETCHING=False
+            _GLOFAS_FETCH_FINISHED_AT=time.time()
     _GLOFAS_THREAD=threading.Thread(target=worker,daemon=True,name='glofas-refresh')
     _GLOFAS_THREAD.start()
     return True
@@ -265,7 +253,7 @@ def package_station(key, force=False):
             'history_points':0,'model_ready':True,'unit':'m3/s',"signal_type":"Relative position within this issue date's GloFAS forecast window; not flood probability"}
 
 def build_dashboard(key):
-    if key not in STATIONS:key='mymensingh'
+    if key not in STATIONS:key='sylhet'
     z=package_station(key)
     return {'station':z,'current':z['current'],'predicted':z['predicted'],'probability':z['probability'],'risk':z['risk'],'trend_per_3h':z['trend_m3s'],'forecast15':z['forecast15'],'history':[],'advice':advice(z['risk']),'simple':make_simple_summary(z),'live_connected':z['live'],'model':{'ready':True,'model_name':'Copernicus GloFAS / LISFLOOD operational ensemble'}}
 
@@ -297,7 +285,7 @@ def index():
 @app.route('/api/zones')
 def zones(): return jsonify([package_station(k) for k in STATIONS])
 @app.route('/api/dashboard')
-def dashboard(): return jsonify(build_dashboard(request.args.get('station','mymensingh')))
+def dashboard(): return jsonify(build_dashboard(request.args.get('station','sylhet')))
 @app.route('/api/national')
 def national():
     zones=[package_station(k) for k in STATIONS]; counts={r:sum(z['risk']==r for z in zones) for r in ['NORMAL','WARNING','FLOOD','SEVERE']}
@@ -315,7 +303,10 @@ def glofas_diagnostics():
     snap=GLOFAS_CACHE.get('payload') or {}
     stations=snap.get('stations') or {}
     lengths={k:len(v or []) for k,v in stations.items()}
-    return jsonify({'connected':bool(snap),'fetching':bool(_GLOFAS_FETCHING),'issue_date':snap.get('issue_date'),'fetched_at':snap.get('fetched_at'),'stale':bool(snap.get('stale')),'station_count':len(stations),'forecast_lengths':lengths,'min_forecast_days':min(lengths.values()) if lengths else 0,'max_forecast_days':max(lengths.values()) if lengths else 0,'last_error':GLOFAS_CACHE.get('error') or snap.get('last_error'),'source':'Copernicus CEMS / GloFAS'})
+    elapsed=None
+    if _GLOFAS_FETCH_STARTED_AT:
+        elapsed=(time.time()-_GLOFAS_FETCH_STARTED_AT) if _GLOFAS_FETCHING else max(0.0, (_GLOFAS_FETCH_FINISHED_AT or time.time())-_GLOFAS_FETCH_STARTED_AT)
+    return jsonify({'connected':bool(snap),'fetching':bool(_GLOFAS_FETCHING),'issue_date':snap.get('issue_date'),'fetched_at':snap.get('fetched_at'),'stale':bool(snap.get('stale')),'station_count':len(stations),'forecast_lengths':lengths,'min_forecast_days':min(lengths.values()) if lengths else 0,'max_forecast_days':max(lengths.values()) if lengths else 0,'last_error':GLOFAS_CACHE.get('error') or snap.get('last_error'),'preflight':None,'fetch_elapsed_seconds':round(elapsed,1) if elapsed is not None else None,'request_timeout_seconds':int(os.environ.get('GLOFAS_REQUEST_TIMEOUT_SECONDS','150')),'source':'Copernicus CEMS / GloFAS'})
 @app.route('/api/analytics')
 def analytics():
     zones=[package_station(k) for k in STATIONS]; valid=[z for z in zones if z.get('current') is not None]
@@ -331,42 +322,105 @@ def data_provenance(): return jsonify(source_status())
 @app.get('/api/research/summary')
 def research_summary():
     zones=[package_station(k) for k in STATIONS]
-    return jsonify({'ok':True,'architecture':'General Mode + Research Mode · GloFAS-only','source':source_status(),'zones':len(zones),'live_zones':sum(z['live'] for z in zones),"risk_definition":"Relative position within the selected issue date's GloFAS forecast window. It is descriptive, not a flood probability and not an official Bangladesh warning threshold.",'forecast_horizon_days':15,'ensemble_enabled':any(any(x.get('ensemble') for x in (GLOFAS_CACHE.get('payload') or {}).get('stations',{}).get(k,[])) for k in STATIONS),'historical_replay':'AVAILABLE_ON_DEMAND','verification':'GloFAS forecast vs GloFAS historical modelled discharge; not independent gauge validation','synthetic_fallback':False})
+    return jsonify({'ok':True,'architecture':'General Mode + Research Mode · GloFAS-only','source':source_status(),'zones':len(zones),'live_zones':sum(z['live'] for z in zones),"risk_definition":"Relative position within the selected issue date's GloFAS forecast window. It is descriptive, not a flood probability and not an official Bangladesh warning threshold.",'forecast_horizon_days':15,'ensemble_enabled':any(v.get('state')=='ready' for k,v in _RESEARCH_JOBS.items() if k.startswith('ensemble:')),'historical_replay':'AVAILABLE_ON_DEMAND','verification':'GloFAS forecast vs GloFAS historical modelled discharge; not independent gauge validation','synthetic_fallback':False})
+
+
+# Research-mode jobs are asynchronous so a slow EWDS queue never blocks a Render Free HTTP worker.
+_RESEARCH_JOBS = {}
+_RESEARCH_JOBS_LOCK = threading.RLock()
+
+def _start_research_job(job_id, fn):
+    with _RESEARCH_JOBS_LOCK:
+        existing=_RESEARCH_JOBS.get(job_id)
+        if existing and existing.get('state') == 'running':
+            return False
+        _RESEARCH_JOBS[job_id]={'state':'running','started_at':time.time(),'result':None,'error':None}
+    def worker():
+        try:
+            result=fn()
+            with _RESEARCH_JOBS_LOCK:
+                _RESEARCH_JOBS[job_id].update(state='ready',result=result,finished_at=time.time())
+        except Exception as exc:
+            with _RESEARCH_JOBS_LOCK:
+                _RESEARCH_JOBS[job_id].update(state='error',error=str(exc),finished_at=time.time())
+    threading.Thread(target=worker,daemon=True,name='floodguard-research').start()
+    return True
+
+def _research_job_response(job_id):
+    with _RESEARCH_JOBS_LOCK:
+        job=_RESEARCH_JOBS.get(job_id)
+        if not job: return {'ok':False,'state':'missing','job_id':job_id}
+        out={'ok':job.get('state')=='ready','state':job.get('state'),'job_id':job_id}
+        if job.get('result') is not None: out.update(job['result'] if isinstance(job['result'],dict) else {'result':job['result']})
+        if job.get('error'): out['error']=job['error']
+        return out
 
 @app.get('/api/research/glofas/<station_id>')
 def research_glofas(station_id):
     if station_id not in STATIONS:return jsonify({'ok':False,'error':'Unknown station'}),404
-    try:return jsonify(fetch_station_ensemble(STATIONS[station_id],force=request.args.get('force')=='1'))
-    except Exception as exc:return jsonify({'ok':False,'station':station_id,'source':'Copernicus CEMS / GloFAS operational ensemble','error':str(exc)}),502
+    force=request.args.get('force')=='1'
+    job_id=f"ensemble:{station_id}"
+    with _RESEARCH_JOBS_LOCK:
+        cached=_RESEARCH_JOBS.get(job_id)
+        if cached and cached.get('state')=='ready' and not force:
+            return jsonify(_research_job_response(job_id))
+        if cached and cached.get('state')=='running':
+            return jsonify(_research_job_response(job_id))
+    _start_research_job(job_id, lambda: fetch_station_ensemble(STATIONS[station_id],force=force))
+    return jsonify({'ok':False,'state':'fetching','job_id':job_id,'station':station_id,'source':'Copernicus CEMS / GloFAS operational ensemble'})
+
+@app.get('/api/research/job/<path:job_id>')
+def research_job(job_id):
+    return jsonify(_research_job_response(job_id))
+
+def _verification_result(station_id, issue_date):
+    from real_data import fetch_historical_series
+    replay=fetch_historical_forecast(STATIONS[station_id],issue_date,lead_days=15); fc=replay.get('forecast',[])
+    issue=datetime.fromisoformat(issue_date).date(); valid_days=[issue+timedelta(days=i) for i in range(1,len(fc)+1)]
+    hist=fetch_historical_series(STATIONS[station_id],valid_days); by_date={r['date']:r['discharge_m3s'] for r in hist}; pairs=[]
+    for row in fc:
+        d=(issue+timedelta(days=int(row['lead_day']))).isoformat()
+        if d in by_date and row.get('discharge_m3s') is not None:pairs.append((int(row['lead_day']),float(row['discharge_m3s']),float(by_date[d]),d))
+    if not pairs: raise RuntimeError('Historical GloFAS target values were not returned for the replay window.')
+    errors=[a-b for _,a,b,_ in pairs]; mae=sum(abs(x) for x in errors)/len(errors); rmse=(sum(x*x for x in errors)/len(errors))**0.5; bias=sum(errors)/len(errors)
+    ma=sum(a for _,a,_,_ in pairs)/len(pairs); mb=sum(b for _,_,b,_ in pairs)/len(pairs); cov=sum((a-ma)*(b-mb) for _,a,b,_ in pairs); va=sum((a-ma)**2 for _,a,_,_ in pairs); vb=sum((b-mb)**2 for _,_,b,_ in pairs); corr=cov/(va*vb)**0.5 if va>0 and vb>0 else None
+    return {'ok':True,'station':station_id,'issue_date':issue_date,'target':'GloFAS v4.0 historical modelled discharge (intermediate)' ,'independent_gauge_validation':False,'n':len(pairs),'mae_m3s':round(mae,2),'rmse_m3s':round(rmse,2),'bias_m3s':round(bias,2),'correlation':round(corr,3) if corr is not None else None,'rows':[{'lead_day':d,'date':dt,'forecast_m3s':round(a,2),'historical_m3s':round(b,2),'error_m3s':round(a-b,2)} for d,a,b,dt in pairs]}
 
 @app.post('/api/research/replay')
 def research_replay():
     data=request.get_json(silent=True) or {}; station_id=data.get('station_id','feni'); issue_date=(data.get('issue_date') or '').strip()
     if station_id not in STATIONS or not issue_date:return jsonify({'ok':False,'error':'station_id and issue_date are required'}),400
-    try:return jsonify(fetch_historical_forecast(STATIONS[station_id],issue_date,lead_days=15))
-    except Exception as exc:return jsonify({'ok':False,'error':str(exc),'station':station_id,'issue_date':issue_date}),502
+    try: parsed_issue=datetime.fromisoformat(issue_date).date()
+    except Exception:return jsonify({'ok':False,'error':'issue_date must be YYYY-MM-DD'}),400
+    if parsed_issue < date(2019,11,5) or parsed_issue > datetime.now(timezone.utc).date():
+        return jsonify({'ok':False,'error':'Operational GloFAS forecast replay supports issue dates from 2019-11-05 through today (UTC).'}),400
+    job_id=f"replay:{station_id}:{issue_date}"
+    with _RESEARCH_JOBS_LOCK:
+        cached=_RESEARCH_JOBS.get(job_id)
+        if cached and cached.get('state')=='ready': return jsonify(_research_job_response(job_id))
+        if cached and cached.get('state')=='running': return jsonify(_research_job_response(job_id))
+    _start_research_job(job_id, lambda: fetch_historical_forecast(STATIONS[station_id],issue_date,lead_days=15))
+    return jsonify({'ok':False,'state':'fetching','job_id':job_id,'station':station_id,'issue_date':issue_date})
 
 @app.post('/api/research/verify')
 def research_verify():
     data=request.get_json(silent=True) or {}; station_id=data.get('station_id','feni'); issue_date=(data.get('issue_date') or '').strip()
     if station_id not in STATIONS or not issue_date:return jsonify({'ok':False,'error':'station_id and issue_date are required'}),400
-    try:
-        from real_data import fetch_historical_series
-        replay=fetch_historical_forecast(STATIONS[station_id],issue_date,lead_days=15); fc=replay.get('forecast',[])
-        issue=datetime.fromisoformat(issue_date).date(); valid_days=[issue+timedelta(days=i) for i in range(1,len(fc)+1)]
-        hist=fetch_historical_series(STATIONS[station_id],valid_days); by_date={r['date']:r['discharge_m3s'] for r in hist}; pairs=[]
-        for row in fc:
-            d=(issue+timedelta(days=int(row['lead_day']))).isoformat()
-            if d in by_date and row.get('discharge_m3s') is not None:pairs.append((int(row['lead_day']),float(row['discharge_m3s']),float(by_date[d]),d))
-        if not pairs:return jsonify({'ok':False,'error':'Historical GloFAS target values were not returned for the replay window.'}),502
-        errors=[a-b for _,a,b,_ in pairs]; mae=sum(abs(x) for x in errors)/len(errors); rmse=(sum(x*x for x in errors)/len(errors))**0.5; bias=sum(errors)/len(errors)
-        ma=sum(a for _,a,_,_ in pairs)/len(pairs); mb=sum(b for _,_,b,_ in pairs)/len(pairs); cov=sum((a-ma)*(b-mb) for _,a,b,_ in pairs); va=sum((a-ma)**2 for _,a,_,_ in pairs); vb=sum((b-mb)**2 for _,_,b,_ in pairs); corr=cov/(va*vb)**0.5 if va>0 and vb>0 else None
-        return jsonify({'ok':True,'station':station_id,'issue_date':issue_date,'target':'GloFAS v5.0 historical modelled discharge','independent_gauge_validation':False,'n':len(pairs),'mae_m3s':round(mae,2),'rmse_m3s':round(rmse,2),'bias_m3s':round(bias,2),'correlation':round(corr,3) if corr is not None else None,'rows':[{'lead_day':d,'date':dt,'forecast_m3s':round(a,2),'historical_m3s':round(b,2),'error_m3s':round(a-b,2)} for d,a,b,dt in pairs]})
-    except Exception as exc:return jsonify({'ok':False,'error':str(exc),'station':station_id,'issue_date':issue_date}),502
+    try: parsed_issue=datetime.fromisoformat(issue_date).date()
+    except Exception:return jsonify({'ok':False,'error':'issue_date must be YYYY-MM-DD'}),400
+    if parsed_issue < date(2019,11,5) or parsed_issue > datetime.now(timezone.utc).date():
+        return jsonify({'ok':False,'error':'Operational GloFAS forecast verification supports issue dates from 2019-11-05 through today (UTC).'}),400
+    job_id=f"verify:{station_id}:{issue_date}"
+    with _RESEARCH_JOBS_LOCK:
+        cached=_RESEARCH_JOBS.get(job_id)
+        if cached and cached.get('state')=='ready': return jsonify(_research_job_response(job_id))
+        if cached and cached.get('state')=='running': return jsonify(_research_job_response(job_id))
+    _start_research_job(job_id, lambda: _verification_result(station_id,issue_date))
+    return jsonify({'ok':False,'state':'fetching','job_id':job_id,'station':station_id,'issue_date':issue_date})
 
 @app.get('/api/research/validation-status')
 def validation_status():
-    return jsonify({'status':'READY_FOR_MODELLED-TARGET VERIFICATION','synthetic_data_used':False,'real_observation_validation':'NOT_AVAILABLE_WITH_GLOFAS-ONLY INPUTS','available_verification':'Operational GloFAS forecast replay vs GloFAS v5.0 historical modelled discharge','independent_ground_truth':False,'note':'This verification measures consistency against a GloFAS historical modelled target; it must not be presented as gauge-based flood-warning accuracy.'})
+    return jsonify({'status':'READY_FOR_MODELLED-TARGET VERIFICATION','synthetic_data_used':False,'real_observation_validation':'NOT_AVAILABLE_WITH_GLOFAS-ONLY INPUTS','available_verification':'Operational GloFAS forecast replay vs GloFAS v4.0 historical modelled discharge (intermediate)' ,'independent_ground_truth':False,'note':'This verification measures consistency against a GloFAS historical modelled target; it must not be presented as gauge-based flood-warning accuracy.'})
 
 @app.get('/api/glofas/<station_id>')
 def glofas_station(station_id):
@@ -455,8 +509,8 @@ def _weather_hazard_score(current, daily, hourly):
 @app.get('/api/hazards/weather')
 def weather():
     try:
-        zone_key = request.args.get('station','mymensingh')
-        z = STATIONS.get(zone_key, STATIONS['mymensingh'])
+        zone_key = request.args.get('station','sylhet')
+        z = STATIONS.get(zone_key, STATIONS['sylhet'])
         lat, lon = z['lat'], z['lon']
         cache_key = f'{zone_key}:{round(float(lat),3)}:{round(float(lon),3)}'
         cached = _weather_cache_get(cache_key)
@@ -530,9 +584,9 @@ def report():
 def copilot():
     data=request.get_json(silent=True) or {}
     question=(data.get('question') or '').strip()
-    station=data.get('station') or 'mymensingh'
+    station=data.get('station') or 'sylhet'
     if not question: return jsonify({'ok':False,'error':'Question is required.'}),400
-    if station not in STATIONS: station='mymensingh'
+    if station not in STATIONS: station='sylhet'
     key=os.environ.get('GEMINI_API_KEY','').strip()
     z=package_station(station)
     if not z.get('live'):
@@ -564,6 +618,10 @@ def copilot():
         answer=(f"Gemini is temporarily unavailable, so FloodGuard is using its grounded fallback. GloFAS forecast discharge for {z['district']} is {z['current']:.1f} m³/s and the Day-2 trend is {(z.get('trend_m3s') or 0):+.1f} m³/s ({direction}). The relative forecast-window classification is {z['risk']}; this is not a flood probability. " + (f"The Day-3 forecast is {f3['level']:.1f} m³/s. " if f3 else '') + "This is GloFAS forecast discharge, not an observed Bangladesh gauge stage. Follow official local warnings for emergency decisions.")
         return jsonify({'ok':True,'answer':answer,'model':'FloodGuard grounded fallback','grounded_in':'Copernicus GloFAS data','provider_error':str(exc)})
 
+@app.get('/api/alerts/config')
+def alerts_config():
+    return jsonify({'ok':True,'email_configured':_email_configured(),'web_push_configured':bool(os.environ.get('VAPID_PUBLIC_KEY','').strip() and os.environ.get('VAPID_PRIVATE_KEY','').strip() and os.environ.get('VAPID_CLAIMS_EMAIL','').strip()),'whatsapp_configured':False,'sms_configured':False})
+
 @app.get('/api/push/public-key')
 def push_public_key():
     key=os.environ.get('VAPID_PUBLIC_KEY','').strip()
@@ -586,8 +644,8 @@ def register():
     data=request.get_json(force=True); email=(data.get('email') or '').strip().lower(); password=data.get('password') or ''
     if not email or len(password)<6:return jsonify({'ok':False,'error':'Use a valid email and a password of at least 6 characters.'}),400
     try:
-        con=db(); cur=con.execute('INSERT INTO users(email,password_hash,zone,language,whatsapp,alerts,email_alerts,whatsapp_alerts) VALUES(?,?,?,?,?,0,1,1)',(email,generate_password_hash(password),'mymensingh','en','')); con.commit(); uid=cur.lastrowid; con.close(); session['uid']=uid
-        return jsonify({'ok':True,'user':{'email':email,'zone':'mymensingh','language':'en','whatsapp':'','alerts':False}})
+        con=db(); cur=con.execute('INSERT INTO users(email,password_hash,zone,language,whatsapp,alerts,email_alerts,whatsapp_alerts) VALUES(?,?,?,?,?,0,1,1)',(email,generate_password_hash(password),'sylhet','en','')); con.commit(); uid=cur.lastrowid; con.close(); session['uid']=uid
+        return jsonify({'ok':True,'user':{'email':email,'zone':'sylhet','language':'en','whatsapp':'','alerts':False}})
     except sqlite3.IntegrityError:return jsonify({'ok':False,'error':'Account already exists.'}),409
 @app.post('/api/auth/login')
 def login():
@@ -610,7 +668,7 @@ def profile():
     if not uid:
         return jsonify({'ok':False,'error':'Login required.'}),401
     data=request.get_json(force=True)
-    zone=data.get('zone') if data.get('zone') in STATIONS else 'mymensingh'
+    zone=data.get('zone') if data.get('zone') in STATIONS else 'sylhet'
     lang=data.get('language') if data.get('language') in {'en','bn'} else 'en'
     wa=(data.get('whatsapp') or '').strip()
     alerts=1 if data.get('alerts') else 0
@@ -622,7 +680,7 @@ def profile():
     if not old:
         con.close()
         return jsonify({'ok':False,'error':'Account not found.'}),404
-    old_zone=old['zone'] if old['zone'] in STATIONS else 'mymensingh'
+    old_zone=old['zone'] if old['zone'] in STATIONS else 'sylhet'
     old_alerts=bool(old['alerts'])
     con.execute('UPDATE users SET zone=?,language=?,whatsapp=?,alerts=?,email_alerts=?,whatsapp_alerts=? WHERE id=?',(zone,lang,wa,alerts,email_alerts,whatsapp_alerts,uid))
     row=con.execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone()
@@ -650,7 +708,7 @@ def test_email():
     if not uid:return jsonify({'ok':False,'error':'Login required.'}),401
     con=db(); row=con.execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone(); con.close()
     if not row:return jsonify({'ok':False,'error':'Account not found.'}),404
-    z=package_station(row['zone'] if row['zone'] in STATIONS else 'mymensingh')
+    z=package_station(row['zone'] if row['zone'] in STATIONS else 'sylhet')
     body=_message_for(z,row['language'] or 'en','daily')
     ok,detail=_send_email(row['email'],'FloodGuard BD — Test email',body)
     return jsonify({'ok':ok,'detail':detail})
@@ -661,7 +719,7 @@ def enable_alerts():
     if not uid:return jsonify({'ok':False,'error':'Login required.'}),401
     con=db(); row=con.execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone(); con.close()
     if not row:return jsonify({'ok':False,'error':'Account not found.'}),404
-    z=package_station(row['zone'] if row['zone'] in STATIONS else 'mymensingh')
+    z=package_station(row['zone'] if row['zone'] in STATIONS else 'sylhet')
     _set_alert_state(uid,last_risk=z['risk'],welcome_sent=0,last_daily_date=None)
     fresh=con=None
     con=db(); row=con.execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone(); con.close()
@@ -683,9 +741,9 @@ def alerts_dispatch():
     return jsonify({'ok':True,'results':dispatch_alerts()})
 
 
-if os.environ.get('ENABLE_BACKGROUND_ALERTS','true').lower() == 'true':
+if os.environ.get('ENABLE_BACKGROUND_ALERTS','false').lower() == 'true':
     start_alert_loop()
-_start_glofas_fetch(False)
+# GloFAS refresh is demand-driven by /api/live-refresh; this avoids consuming the Free instance during boot.
 
 if __name__=='__main__':
     start_alert_loop()

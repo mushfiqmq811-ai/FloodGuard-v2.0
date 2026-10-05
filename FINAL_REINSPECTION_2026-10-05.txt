@@ -1,0 +1,26 @@
+FloodGuard BD — Final Reinspection & Solution Plan — 2026-10-05
+
+Confirmed source-level root causes:
+1. Forecast preflight was hardcoded to today's issue date and could block valid prior-day fallback.
+2. Forecast preflight duplicated the real EWDS request and consumed extra queue/CPU on Render Free.
+3. Historical GloFAS request still used obsolete hyear/hmonth/hday and old discharge variable. Current Copernicus schema uses operational V4, year/month/day, average_river_discharge_in_the_last_24_hours, and timespan=time_mean.
+4. GloFAS startup fetch ran at import time, wasting Free-instance resources and making cold starts heavier.
+5. SMTP configuration was documented despite Render Free blocking outbound SMTP ports 25/465/587.
+6. Root index.html and templates/index.html could drift; templates is now synchronized to the canonical root UI.
+7. Map/chart/action/forecast/simulation frontend wiring is present and syntax-valid.
+
+Implemented in this build:
+- Demand-driven GloFAS refresh via /api/live-refresh.
+- Issue-date fallback no longer blocked by preflight.
+- Optional preflight is diagnostic and date-aware only.
+- Historical API migrated to current operational V4 schema.
+- Historical replay uses bounded EWDS retrieval without forecast preflight.
+- Render Free-friendly Gunicorn settings and health check.
+- SMTP removed from deployment guidance; EMAIL_SCRIPT_URL is the supported email path on Free.
+- Canonical frontend synchronized.
+- No synthetic hydrological fallback.
+
+Validation required after deploy:
+/api/glofas/diagnostics -> station_count 20, min/max 15 is the success target.
+Then test /api/zones, /api/dashboard?station=sylhet, /api/analytics, /api/research/summary, /api/research/glofas/sylhet.
+Historical replay/verification must be tested separately because it depends on the selected historical date being available.

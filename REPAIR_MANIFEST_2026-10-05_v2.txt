@@ -1,0 +1,25 @@
+FloodGuard BD — GloFAS Fetch Hang Repair v2
+
+Root cause confirmed from production diagnostics:
+- connected=false
+- station_count=0
+- fetching=true
+- last_error=null
+This means the background EWDS request was still blocked in cdsapi's default synchronous polling.
+
+Changes:
+1. GloFAS EWDS client now uses wait_until_complete=False.
+2. Explicit bounded polling with GLOFAS_REQUEST_TIMEOUT_SECONDS (default 150s).
+3. cdsapi HTTP timeout 30s, retry_max=1, sleep_max=5, progress disabled.
+4. Failed/timed-out EWDS tasks are explicitly cleaned up when possible.
+5. Issue-date lookback reduced from 5 days to 1 day to prevent long retry chains.
+6. Main forecast request bbox tightened to Bangladesh + immediate margin.
+7. Diagnostics now reports fetch_elapsed_seconds and request_timeout_seconds.
+8. No synthetic hydrological fallback was added.
+9. GloFAS remains the only hydrological source.
+
+Validation:
+- Python py_compile: PASS
+- Inline JavaScript node --check: PASS
+
+Live EWDS authentication/data retrieval was not available in the local build environment, so live production success is not claimed until Render redeploy is verified.

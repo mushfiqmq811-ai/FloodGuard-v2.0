@@ -1,54 +1,54 @@
-FLOODGUARD BD — GLOFAS-ONLY DEPLOYMENT
+FLOODGUARD BD — GLOFAS-ONLY / RENDER FREE
 
-Build command:
+BUILD
+-----
 pip install -r requirements.txt
 
-Start command:
-gunicorn --workers 1 --threads 4 --timeout 180 --bind 0.0.0.0:$PORT app:app
+START
+-----
+gunicorn --workers 1 --threads 1 --timeout 120 --bind 0.0.0.0:$PORT app:app
 
-REQUIRED Render environment variables
--------------------------------------
+REQUIRED ENVIRONMENT
+--------------------
 SECRET_KEY=<long random value>
 CDS_API_KEY=<your Copernicus EWDS/CDS API key>
 
-Optional integrations
-----------------------
-GEMINI_API_KEY=<optional; without it FloodGuard uses its built-in grounded explainer>
-SMTP_HOST=<optional>
-SMTP_PORT=587
-SMTP_USER=<optional>
-SMTP_PASS=<optional>
-EMAIL_FROM=<optional>
-SMTP_TLS=true
-VAPID_PUBLIC_KEY=<optional for browser push>
-VAPID_PRIVATE_KEY=<optional for browser push>
+OPTIONAL
+--------
+GEMINI_API_KEY=<optional; grounded local Copilot fallback exists>
+EMAIL_SCRIPT_URL=<recommended HTTP email webhook for Render Free>
+VAPID_PUBLIC_KEY=<optional browser push>
+VAPID_PRIVATE_KEY=<optional browser push>
 VAPID_CLAIMS_EMAIL=<mailto: address used for VAPID claims>
-ENABLE_BACKGROUND_ALERTS=true
+ENABLE_BACKGROUND_ALERTS=false
 GLOFAS_CACHE_SECONDS=1800
-GLOFAS_ISSUE_LOOKBACK_DAYS=5
+GLOFAS_ISSUE_LOOKBACK_DAYS=3
 GLOFAS_FORECAST_DAYS=15
 
 DATA SOURCE
 -----------
-Copernicus CEMS / GloFAS via EWDS API:
-https://ewds.climate.copernicus.eu/api
-Dataset: cems-glofas-forecast
-Variable: river_discharge_in_the_last_24_hours
-Operational hydrological model: LISFLOOD
+Copernicus CEMS / GloFAS via EWDS API: https://ewds.climate.copernicus.eu/api
+Forecast dataset: cems-glofas-forecast
+Forecast variable: river_discharge_in_the_last_24_hours
+Operational hydrological model: LISFLOOD / GloFAS v4.0
 
 AUTHENTIC-DATA GUARANTEE
 ------------------------
-The production hydrological path contains NO synthetic fallback and NO BWDB dependency.
-The server automatically tries the newest available operational GloFAS issue date and can step back several days if the newest daily issue is not yet published.
-A successful real snapshot is persisted locally and reused after a process restart. If no real snapshot has ever been fetched, the UI stays in a connecting state rather than inventing hydrological values.
+The hydrological runtime path has NO synthetic fallback and NO BWDB dependency. If EWDS data cannot be fetched, the UI stays unavailable/stale rather than inventing values.
+
+MONITORING
+----------
+Six target regions are used to reduce EWDS payload size on Render Free while keeping representative geographic coverage: Sylhet, Kurigram, Sirajganj, Rajshahi, Faridpur and Feni. These are GloFAS target locations, not gauge stations.
 
 SCIENTIFIC DEFINITION
 ---------------------
-GloFAS supplies forecast river discharge (m³/s), not Bangladesh gauge water level.
-FloodGuard's public signal is a transparent percentile score within each zone's loaded 15-day GloFAS forecast window. It is NOT an official Bangladesh flood-warning threshold.
-Research Mode exposes P10/P50/P90 ensemble evidence, operational replay, and modelled-target verification.
+GloFAS supplies forecast river discharge (m³/s), not Bangladesh gauge water level. The public signal is a percentile position inside each zone's 15-day forecast window, not a flood probability or official warning threshold.
 
-RENDER NOTE
------------
-The service intentionally uses one Gunicorn worker because the in-process GloFAS refresh and alert loop need one owner. Render Free web services have an ephemeral filesystem, so the local real-data cache and SQLite account database are not permanent across redeploy/spin-down.
-For permanent accounts/alert history, connect the app to a persistent Postgres database later.
+RESEARCH / VERIFICATION
+------------------------
+Research ensemble is selected-zone and on-demand. Historical verification uses the operational GloFAS historical V4 product and compares it with an operational forecast replay. This is model-vs-model verification, not independent gauge truth.
+
+RENDER FREE NOTE
+----------------
+Render Free has 0.1 CPU / 512 MB RAM, 15-minute idle spin-down, ephemeral filesystem, and no outbound SMTP ports 25/465/587. citeturn0search0turn0search1
+The app therefore does not rely on a permanent local cache, startup downloads, SMTP, or a continuously running alert scheduler. EMAIL_SCRIPT_URL is the supported email route.

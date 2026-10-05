@@ -1,41 +1,30 @@
-# FloodGuard BD — GloFAS-Only Production Build
+# FloodGuard BD — GloFAS-only production build
 
-FloodGuard BD keeps the existing visual language and uses **Copernicus CEMS / GloFAS** as its only operational hydrological source. BWDB scraping, synthetic hydrological fallback and fake observed water levels are not part of the production data path.
+FloodGuard BD keeps the existing UI and uses **Copernicus CEMS / GloFAS** as its only operational hydrological source. BWDB scraping, synthetic hydrological fallback and fake observed water levels are not part of the production data path.
 
 ## Operational data
 - Dataset: `cems-glofas-forecast`
 - Variable: `river_discharge_in_the_last_24_hours`
 - Unit: m³/s
-- Operational model: LISFLOOD
-- FloodGuard display horizon: 15 days
-- Ensemble evidence: P10 / P50 / P90 when returned by EWDS
-- Automatic issue-date fallback: newest available daily issue, stepping back several days when publication lags
-- Persistent real snapshot: the last successfully fetched authentic dataset is retained locally for process restarts
+- Operational model: LISFLOOD / GloFAS v4.0 operational forecast
+- Forecast horizon: 15 days
+- Monitoring coverage: 6 selected Bangladesh target regions
+- Target coordinates are locations; the backend resolves the nearest finite GloFAS river-discharge grid cell in the returned data. They are **not Bangladesh gauge stations**.
+- Ensemble evidence: P10 / P50 / P90 is fetched on demand for the selected Research zone.
+- Issue-date fallback: newest available daily issue, then up to three prior UTC dates when publication lags.
 
 ## General Mode
-Public-facing monitoring includes:
-- Home / current situation
-- 20 strategic GloFAS forecast zones
-- Bangladesh map
-- 15-day forecast cards, table and charts
-- Forecast-window signal ranking and national distribution
-- Weather, earthquake and cyclone hazard feeds
-- GloFAS scenario lab
-- Grounded FloodGuard Copilot
-- Account, saved zone and in-app alert history
-- Email and browser push notification channels when their server credentials are configured
+The existing public UI remains intact and includes current situation, selected-zone forecast, Bangladesh map, 15-day outlook, analytics, hazards, simulation, alerts and Copilot.
 
 ## Research Mode
-Research is a separate technical page rather than a second fake data pipeline. It exposes:
-- Source provenance
-- GloFAS/LISFLOOD architecture
-- Ensemble P10/P50/P90 evidence
-- Operational forecast replay by issue date
-- Forecast-vs-GloFAS-historical verification with MAE, RMSE, bias and correlation
-- Explicit scientific limitation: the verification target is a GloFAS modelled historical product, not independent Bangladesh gauge truth
+Research exposes provenance, ensemble P10/P50/P90 evidence, operational forecast replay by issue date, and forecast-vs-historical GloFAS verification. Verification is explicitly **model-vs-model**, not independent gauge validation.
 
 ## Signal definition
-FloodGuard does **not** invent a Bangladesh danger-stage threshold from GloFAS discharge. The public signal is a transparent percentile score within each zone's loaded 15-day forecast window. It is experimental decision support, not an official flood warning.
+FloodGuard does not invent a Bangladesh danger-stage threshold from discharge. Its public high-flow signal is a transparent percentile position inside the selected zone's loaded 15-day GloFAS forecast window. It is not a flood probability and not an official Bangladesh warning.
 
-## Deployment
-See `DEPLOY_RENDER.txt` for the exact Render configuration. The required hydrological secret is `CDS_API_KEY`. Gemini is optional because FloodGuard includes a grounded local explainer fallback; SMTP and VAPID are optional notification channels.
+## Render Free architecture
+Render Free provides 0.1 CPU and 512 MB RAM, spins down after inactivity, loses local filesystem state on restart/spin-down, and blocks outbound SMTP ports 25/465/587. citeturn0search0turn0search1
+
+Therefore this build uses one Gunicorn worker/thread, demand-driven GloFAS refresh, compact geographic coverage, no startup download, best-effort local cache, and HTTP email webhook delivery through `EMAIL_SCRIPT_URL`. Background alert looping is off by default; a successful GloFAS refresh can dispatch configured alerts while the service is awake.
+
+Required Render secret: `CDS_API_KEY`. Gemini is optional. Browser push requires VAPID credentials.

@@ -1,0 +1,38 @@
+FloodGuard BD — Full Audit & Repair Report — 2026-10-05
+
+SCOPE
+- Audited the supplied GloFAS fetch-hang build end-to-end: Render entrypoints, Flask routes, GloFAS ingestion, NetCDF parsing, frontend API wiring, Map, Charts, Forecast cards, Simulation, Copilot, Research, Historical replay/verification, and notifications.
+
+ROOT CAUSES FOUND
+1. EWDS retrieval used asynchronous cdsapi mode only after the prior patch, but production had no tiny preflight request to distinguish authentication/licence/request-schema problems from queue latency.
+2. Frontend helper functions were accidentally absent: initMap, chartOptions, actionText/bnActions. This caused Map, Chart.js rendering, and public action text to fail even if data loaded.
+3. Forecast projection cards existed in HTML but renderForecast did not populate the 72-hour, 7-day and 15-day cards.
+4. Analytics did not redraw the selected-zone GloFAS chart when the Analytics page opened.
+5. Simulation's “Use GloFAS Day 1” button had no event listener.
+6. Research replay/historical requests still used unbounded synchronous CDS retrieval paths.
+7. Research frontend requests used the generic 12-second timeout although backend data retrieval can legitimately take longer.
+8. Alert configuration failures were largely silent in the UI.
+
+REPAIRS
+- Added bounded EWDS async retrieval with explicit polling, hard deadline and server-side task cleanup.
+- Added a tiny 24-hour GloFAS preflight request that exposes exact EWDS authentication/licence/request errors before the full dashboard download.
+- Main GloFAS remains authentic-only; no synthetic hydrology fallback.
+- Historical and replay downloads now use the same bounded retrieval mechanism.
+- Restored missing frontend helpers without redesigning the UI.
+- Wired 72h/7d/15d cards, Map, Analytics chart, Simulation preset, Copilot, replay and verification controls.
+- Added alert configuration visibility for email/browser push.
+- Added preflight details to /api/glofas/diagnostics.
+
+SCIENTIFIC BOUNDARIES
+- GloFAS forecast variable is river discharge in m³/s. It is not observed Bangladesh gauge stage.
+- FloodGuard's percentile/risk bands are descriptive relative positions inside the loaded forecast window, not official Bangladesh warning probabilities or thresholds.
+- Research verification is GloFAS operational forecast replay versus GloFAS historical modelled discharge; it is not independent gauge validation.
+
+LOCAL VALIDATION
+- Python py_compile: PASS
+- Frontend JavaScript node --check: PASS
+- DOM id-reference scan: PASS (no missing $() ids)
+- GloFAS control parser synthetic-shape unit check: 15 lead days PASS
+- GloFAS ensemble P10/P50/P90 parser check: 15 lead days PASS
+- ZIP integrity: to be checked after packaging
+- Live EWDS authentication/download: not possible in the local environment because the user's private key is not available; production must report the preflight result.

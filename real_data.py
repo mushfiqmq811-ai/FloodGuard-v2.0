@@ -28,10 +28,12 @@ VARIABLE = "river_discharge_in_the_last_24_hours"
 SYSTEM_VERSION = "operational"
 HYDRO_MODEL = "lisflood"
 CACHE_TTL = int(os.getenv("GLOFAS_CACHE_SECONDS", "1800"))
-FORECAST_DAYS = int(os.getenv("GLOFAS_FORECAST_DAYS", "15"))
+FORECAST_DAYS = min(15, max(1, int(os.getenv("GLOFAS_FORECAST_DAYS", "15"))))
+GLOFAS_REQUEST_TIMEOUT = int(os.getenv("GLOFAS_REQUEST_TIMEOUT_SECONDS", "150"))
+GLOFAS_POLL_SECONDS = int(os.getenv("GLOFAS_POLL_SECONDS", "2"))
 # N,S,W,E — small enough to keep the EWDS request practical while covering
 # Bangladesh and immediate upstream areas used by the strategic zones.
-BBOX = [27.5, 88.0, 20.5, 93.0]
+BBOX = [26.20, 88.30, 22.80, 92.10]  # N,S,W,E; compact envelope around the six selected GloFAS points
 CACHE_FILE = Path(os.getenv("GLOFAS_SNAPSHOT_FILE", Path(__file__).with_name("cache") / "glofas_snapshot.json"))
 
 _lock = threading.RLock()
@@ -49,9 +51,10 @@ def source_status():
         "unit": "m3/s",
         "forecast_horizon_days": FORECAST_DAYS,
         "operational_model": "LISFLOOD",
-        "glofas_version": "Operational",
+        "glofas_version": "Operational v4.0",
         "synthetic_fallback": False,
         "persisted_real_snapshot": str(CACHE_FILE),
+        "persistence_note": "Local cache is best-effort only on Render Free; it is never treated as permanent storage.",
     }
 
 
@@ -87,7 +90,19 @@ def _client():
     key = os.getenv("CDS_API_KEY", "").strip()
     if not key:
         raise RuntimeError("CDS_API_KEY is not configured")
-    return cdsapi.Client(url=EWDS_API_URL, key=key, quiet=True)
+    # Do not use cdsapi's default synchronous polling here: it can wait
+    # indefinitely while an EWDS request remains queued. We poll explicitly
+    # below so Render can fail fast and report the real state.
+    return cdsapi.Client(
+        url=EWDS_API_URL,
+        key=key,
+        quiet=True,
+        progress=False,
+        timeout=30,
+        retry_max=1,
+        sleep_max=5,
+        wait_until_complete=False,
+    )
 
 
 def _lead_hours():
@@ -95,15 +110,51 @@ def _lead_hours():
 
 
 def _candidate_issue_dates():
-    """Newest-first issue dates; daily operational publication can lag UTC."""
+    """Try the newest operational issue first, then recent dates if publication lagged."""
     today = datetime.now(timezone.utc).date()
-    lookback = int(os.getenv("GLOFAS_ISSUE_LOOKBACK_DAYS", "5"))
+    lookback = int(os.getenv("GLOFAS_ISSUE_LOOKBACK_DAYS", "3"))
     return [today - timedelta(days=i) for i in range(lookback + 1)]
 
 
-def _request_file(issue_date: date, product_type="control_forecast", bbox=None, days=None):
-    fd, path = tempfile.mkstemp(suffix=".nc")
+def _retrieve_bounded(dataset, request, suffix=".nc", timeout=None):
+    """Submit an EWDS request asynchronously, poll it with a hard deadline, then download."""
+    fd, path = tempfile.mkstemp(suffix=suffix)
     os.close(fd)
+    client = _client()
+    result = None
+    deadline = time.monotonic() + int(timeout or GLOFAS_REQUEST_TIMEOUT)
+    try:
+        result = client.retrieve(dataset, request)
+        while True:
+            reply = getattr(result, "reply", {}) or {}
+            state = reply.get("state")
+            if state == "completed":
+                break
+            if state == "failed":
+                err = reply.get("error") or {}
+                msg = err.get("message") or err.get("reason") or "unknown error"
+                raise RuntimeError(f"EWDS {dataset} request failed: {msg}")
+            if state not in ("queued", "running", None):
+                raise RuntimeError(f"EWDS {dataset} returned unexpected state: {state}")
+            if time.monotonic() >= deadline:
+                rid = reply.get("request_id", "unknown")
+                raise TimeoutError(f"EWDS {dataset} request timed out after {int(timeout or GLOFAS_REQUEST_TIMEOUT)}s (state={state}, request_id={rid})")
+            time.sleep(max(1, GLOFAS_POLL_SECONDS))
+            result.update()
+        result.download(path)
+        if not os.path.exists(path) or os.path.getsize(path) < 1000:
+            raise RuntimeError(f"EWDS {dataset} returned an empty file")
+        return path
+    finally:
+        if result is not None:
+            try:
+                if getattr(result, "reply", {}).get("state") not in ("completed",):
+                    result.delete()
+            except Exception:
+                pass
+
+def _request_file(issue_date: date, product_type="control_forecast", bbox=None, days=None):
+    request_days = int(days or FORECAST_DAYS)
     request = {
         "system_version": SYSTEM_VERSION,
         "hydrological_model": HYDRO_MODEL,
@@ -112,16 +163,12 @@ def _request_file(issue_date: date, product_type="control_forecast", bbox=None, 
         "year": issue_date.strftime("%Y"),
         "month": issue_date.strftime("%m"),
         "day": issue_date.strftime("%d"),
-        "leadtime_hour": [str(h) for h in range(24, ((days or FORECAST_DAYS) + 1) * 24, 24)],
+        "leadtime_hour": [str(h) for h in range(24, (request_days + 1) * 24, 24)],
         "area": bbox or BBOX,
         "data_format": "netcdf",
         "download_format": "unarchived",
     }
-    _client().retrieve(DATASET, request).download(path)
-    if not os.path.exists(path) or os.path.getsize(path) < 1000:
-        raise RuntimeError("EWDS returned an empty GloFAS file")
-    return path
-
+    return _retrieve_bounded(DATASET, request, suffix=".nc")
 
 def _coord_name(ds, candidates):
     names = list(ds.coords) + list(ds.dims)
@@ -181,8 +228,39 @@ def _series_for(ds, station, max_days=None):
     unresolved time/member axis into fake sequential days.
     """
     lat, lon, var, step, number, time_name = _coords(ds)
-    da = ds[var].sel({lat: float(station["lat"]), lon: float(station["lon"])}, method="nearest")
     limit = int(max_days or FORECAST_DAYS)
+
+    # The user-facing coordinate is a target location, not a claim that the
+    # coordinate itself is a GloFAS river cell. Resolve the nearest finite
+    # modelled discharge cell inside the requested bbox so land/empty pixels
+    # cannot silently become a station value.
+    grid = ds[var]
+    sample = grid
+    # Reduce every non-spatial dimension only for validity detection. This does
+    # not become the station value; it merely finds a grid cell with at least
+    # one finite modelled discharge value.
+    for d in list(sample.dims):
+        if d not in (lat, lon):
+            sample = sample.max(dim=d, skipna=True)
+    import numpy as np
+    arr = np.asarray(sample.values)
+    lats = np.asarray(ds[lat].values).reshape(-1)
+    lons = np.asarray(ds[lon].values).reshape(-1)
+    if arr.ndim != 2 or arr.shape != (len(lats), len(lons)):
+        # Handle transposed spatial dimensions.
+        if arr.ndim == 2 and arr.shape == (len(lons), len(lats)):
+            arr = arr.T
+        else:
+            raise RuntimeError(f"Unsupported spatial layout for GloFAS variable: {arr.shape}")
+    finite = np.isfinite(arr)
+    if not finite.any():
+        raise RuntimeError("No finite GloFAS river-discharge cells were returned in the requested area")
+    target_lat, target_lon = float(station["lat"]), float(station["lon"])
+    # longitude/latitude distance is sufficient over this small Bangladesh window.
+    d2 = (lats[:, None] - target_lat) ** 2 + ((lons[None, :] - target_lon) * np.cos(np.deg2rad(target_lat))) ** 2
+    d2[~finite] = np.inf
+    ii, jj = np.unravel_index(np.argmin(d2), d2.shape)
+    da = grid.isel({lat: int(ii), lon: int(jj)})
 
     # Remove singleton reference-time dimensions first. A reference time with
     # more than one value is not a valid single forecast issue for this parser.
@@ -326,7 +404,7 @@ def fetch_station_ensemble(station, force=False):
         if cached and not force and time.time()-cached.get("_ts",0) < CACHE_TTL:
             return cached["payload"]
         last_error=None
-        pad=float(os.getenv("GLOFAS_RESEARCH_BBOX_PAD","0.10"))
+        pad=float(os.getenv("GLOFAS_RESEARCH_BBOX_PAD","0.06"))
         bbox=[station["lat"]+pad, station["lon"]-pad, station["lat"]-pad, station["lon"]+pad]
         for issue_date in _candidate_issue_dates():
             path=None
@@ -372,70 +450,106 @@ def live_snapshot(stations, force=False):
 
 
 def _historical_request_file(days, bbox):
-    fd, path = tempfile.mkstemp(suffix=".nc")
-    os.close(fd)
-    request = {
-        "system_version": ["version_5_0"],
-        "hydrological_model": ["lisflood"],
-        "product_type": ["intermediate"],
-        "variable": [VARIABLE],
-        "hyear": sorted({d.strftime("%Y") for d in days}),
-        "hmonth": sorted({d.strftime("%m") for d in days}),
-        "hday": sorted({d.strftime("%d") for d in days}),
-        "area": bbox,
-        "data_format": "netcdf",
-        "download_format": "unarchived",
-    }
-    _client().retrieve(HISTORICAL_DATASET, request).download(path)
-    if not os.path.exists(path) or os.path.getsize(path) < 1000:
-        raise RuntimeError("EWDS returned an empty historical GloFAS file")
-    return path
+    """Download a small GloFAS v4 historical subset for the exact requested dates.
+
+    The current EWDS historical API requires year/month/day, ``timespan`` and
+    the renamed average-discharge variable.  Date fields are grouped by
+    year-month so a request never accidentally expands into a Cartesian
+    product of unrelated months/days.
+    """
+    days = sorted({d if isinstance(d, date) else date.fromisoformat(str(d)) for d in days})
+    if not days:
+        raise ValueError("No historical dates requested")
+
+    # One EWDS file per calendar month keeps requests small and preserves the
+    # exact requested day set.  The caller combines the returned rows.
+    groups = {}
+    for d in days:
+        groups.setdefault((d.year, d.month), []).append(d)
+
+    paths = []
+    for (year, month), month_days in sorted(groups.items()):
+        request = {
+            "system_version": "version_4_0",
+            "hydrological_model": "lisflood",
+            "product_type": "intermediate",
+            "variable": "average_river_discharge_in_the_last_24_hours",
+            "timespan": "time_mean",
+            "year": str(year),
+            "month": f"{month:02d}",
+            "day": [f"{d.day:02d}" for d in month_days],
+            "area": bbox,
+            "data_format": "netcdf",
+            "download_format": "unarchived",
+        }
+        paths.append(_retrieve_bounded(
+            HISTORICAL_DATASET,
+            request,
+            suffix=".nc",
+            timeout=int(os.getenv("GLOFAS_HISTORICAL_TIMEOUT_SECONDS", "150")),
+        ))
+    return paths
 
 
 def fetch_historical_series(station, valid_days):
-    """Fetch modelled GloFAS historical discharge for selected valid dates.
+    """Fetch exact-date GloFAS historical discharge for a selected target.
 
-    This is a GloFAS-vs-GloFAS verification target, not independent gauge truth.
+    This is a GloFAS-vs-GloFAS modelled verification target, not independent
+    gauge truth. Requests are split by calendar month to keep EWDS jobs small.
     """
-    days = [d if isinstance(d, date) else date.fromisoformat(str(d)) for d in valid_days]
+    days = sorted({d if isinstance(d, date) else date.fromisoformat(str(d)) for d in valid_days})
     if not days:
         return []
     pad = 0.06
     bbox = [station["lat"] + pad, station["lon"] - pad, station["lat"] - pad, station["lon"] + pad]
-    path = None
+    paths = []
+    rows = []
     try:
-        path = _historical_request_file(days, bbox)
-        ds = xr.open_dataset(path)
-        try:
-            lat, lon, var, _, _, time_name = _coords(ds)
-            da = ds[var].sel({lat: float(station["lat"]), lon: float(station["lon"])}, method="nearest")
-            # Historical product is daily; normalize time axis to YYYY-MM-DD.
-            tname = time_name or _coord_name(ds, ("time",))
-            if not tname or tname not in da.dims:
-                raise RuntimeError("Historical GloFAS file has no time coordinate")
-            vals = da.values.reshape(-1)
-            times = ds[tname].values.reshape(-1)
-            rows = []
-            for t, v in zip(times, vals):
-                x = _to_float(v)
-                if x is not None:
+        paths = _historical_request_file(days, bbox)
+        wanted = {d.isoformat() for d in days}
+        for path in paths:
+            ds = xr.open_dataset(path)
+            try:
+                lat, lon, var, _, _, time_name = _coords(ds)
+                tname = time_name or _coord_name(ds, ("time",))
+                if not tname:
+                    raise RuntimeError("Historical GloFAS file has no time coordinate")
+
+                # Select the nearest returned grid point. The user-facing
+                # location is a target coordinate, not a gauge claim.
+                da = ds[var].sel({lat: float(station["lat"]), lon: float(station["lon"])}, method="nearest")
+                vals = da.values.reshape(-1)
+                times = ds[tname].values.reshape(-1)
+                for t, v in zip(times, vals):
+                    x = _to_float(v)
+                    if x is None:
+                        continue
                     ts = str(t)[:10]
-                    rows.append({"date": ts, "discharge_m3s": x})
-            wanted = {d.isoformat() for d in days}
-            return [r for r in rows if r["date"] in wanted]
-        finally:
-            ds.close()
+                    if ts in wanted:
+                        rows.append({"date": ts, "discharge_m3s": x})
+            finally:
+                ds.close()
+        # Deduplicate if a provider response contains overlapping timestamps.
+        unique = {r["date"]: r for r in rows}
+        return [unique[d.isoformat()] for d in days if d.isoformat() in unique]
     finally:
-        if path:
+        for path in paths:
             try:
                 os.remove(path)
             except OSError:
                 pass
 
-
 def fetch_historical_forecast(station, issue_date, lead_days=FORECAST_DAYS):
-    """Retrieve an operational GloFAS forecast issued on a historical date."""
+    """Retrieve an operational GloFAS forecast issued on an archived date.
+
+    The operational GloFAS forecast archive starts on 2019-11-05; reject dates
+    outside that archive instead of submitting a doomed EWDS job.
+    """
     d = date.fromisoformat(issue_date)
+    archive_start = date(2019, 11, 5)
+    today_utc = datetime.now(timezone.utc).date()
+    if d < archive_start or d > today_utc:
+        raise ValueError(f"Operational GloFAS forecast archive supports issue dates from {archive_start.isoformat()} through {today_utc.isoformat()}")
     fd, path = tempfile.mkstemp(suffix=".nc")
     os.close(fd)
     try:
@@ -452,7 +566,8 @@ def fetch_historical_forecast(station, issue_date, lead_days=FORECAST_DAYS):
             "data_format": "netcdf",
             "download_format": "unarchived",
         }
-        _client().retrieve(DATASET, request).download(path)
+        retrieved_path = _retrieve_bounded(DATASET, request, suffix=".nc")
+        path = retrieved_path
         ds = xr.open_dataset(path)
         try:
             series = _series_for(ds, station)
