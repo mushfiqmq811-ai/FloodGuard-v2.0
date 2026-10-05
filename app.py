@@ -2,7 +2,7 @@ from flask import Flask, render_template, jsonify, request, Response, session, s
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta, timezone
 import math, threading, time, statistics, os, sqlite3, re, smtplib, urllib.parse, json
-from real_data import source_status, fetch_glofas_forecast, live_snapshot, fetch_historical_forecast
+from real_data import source_status, fetch_glofas_forecast, fetch_ensemble_forecast, live_snapshot, fetch_historical_forecast
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE, 'floodguard.db')
@@ -188,6 +188,10 @@ GLOFAS_CACHE={'payload':None,'expires':0,'error':None}
 CACHE_SECONDS=int(os.environ.get('GLOFAS_CACHE_SECONDS','1800'))
 
 def _glofas_payload(force=False):
+    # Never let an HTTP request duplicate or wait behind the startup download.
+    # The background worker owns the initial GloFAS fetch; the UI polls live-status.
+    if not force and not GLOFAS_CACHE.get('payload') and (_GLOFAS_FETCHING or GLOFAS_CACHE.get('error')):
+        return None
     try:
         payload=live_snapshot(STATIONS,force=force)
         GLOFAS_CACHE.update(payload=payload,expires=time.time()+CACHE_SECONDS,error=None)
@@ -251,7 +255,7 @@ def package_station(key, force=False):
 def build_dashboard(key):
     if key not in STATIONS:key='mymensingh'
     z=package_station(key)
-    return {'station':z,'current':z['current'],'predicted':z['predicted'],'probability':z['probability'],'risk':z['risk'],'trend_per_3h':z['trend_m3s'],'forecast15':z['forecast15'],'history':[],'advice':advice(z['risk']),'simple':make_simple_summary(z),'live_connected':z['live'],'model':{'ready':True,'model_name':'Copernicus GloFAS / LISFLOOD operational ensemble'}}
+    return {'station':z,'current':z['current'],'predicted':z['predicted'],'probability':z['probability'],'risk':z['risk'],'trend_per_3h':z['trend_m3s'],'forecast15':z['forecast15'],'history':[],'advice':advice(z['risk']),'simple':make_simple_summary(z),'live_connected':z['live'],'model':{'ready':True,'model_name':'Copernicus GloFAS / LISFLOOD operational forecast with on-demand ensemble evidence'}}
 
 def advice(risk):
     if risk=='UNAVAILABLE': return ['GloFAS forecast data is currently unavailable for this zone.','FloodGuard will not substitute simulated values.','Follow official Bangladesh flood authorities for decisions.']
@@ -279,7 +283,13 @@ def index():
         return send_file(root_index)
     return render_template('index.html')
 @app.route('/api/zones')
-def zones(): return jsonify([package_station(k) for k in STATIONS])
+def zones():
+    # During the initial fetch return an empty list instead of blocking the
+    # Gunicorn worker. The frontend already polls /api/live-status and reloads
+    # zones once authentic GloFAS data is ready.
+    if not GLOFAS_CACHE.get('payload') and (_GLOFAS_FETCHING or GLOFAS_CACHE.get('error')):
+        return jsonify([])
+    return jsonify([package_station(k) for k in STATIONS])
 @app.route('/api/dashboard')
 def dashboard(): return jsonify(build_dashboard(request.args.get('station','mymensingh')))
 @app.route('/api/national')
@@ -301,7 +311,7 @@ def analytics():
     return jsonify({'counts':{r:sum(z['risk']==r for z in zones) for r in ['NORMAL','WARNING','FLOOD','SEVERE']},'avg_discharge_m3s':round(statistics.mean(z['current'] for z in valid),1) if valid else None,'rising':rising[:6],'highest_signal':sorted(valid,key=lambda z:z.get('probability') or 0,reverse=True)[:6]})
 
 @app.get('/api/model-status')
-def api_model_status(): return jsonify({'ready':True,'model_name':'Copernicus GloFAS / LISFLOOD operational ensemble','training_source':'ECMWF meteorological ensemble + LISFLOOD hydrological model','synthetic_data_used':False,'note':'FloodGuard adds a transparent forecast-window percentile decision layer; it is not an official Bangladesh warning model.'})
+def api_model_status(): return jsonify({'ready':True,'model_name':'Copernicus GloFAS / LISFLOOD operational forecast with on-demand ensemble evidence','training_source':'ECMWF meteorological ensemble + LISFLOOD hydrological model','synthetic_data_used':False,'note':'FloodGuard adds a transparent forecast-window percentile decision layer; it is not an official Bangladesh warning model.'})
 
 @app.get('/api/data-provenance')
 def data_provenance(): return jsonify(source_status())
@@ -309,12 +319,22 @@ def data_provenance(): return jsonify(source_status())
 @app.get('/api/research/summary')
 def research_summary():
     zones=[package_station(k) for k in STATIONS]
-    return jsonify({'ok':True,'architecture':'General Mode + Research Mode · GloFAS-only','source':source_status(),'zones':len(zones),'live_zones':sum(z['live'] for z in zones),'risk_definition':'Forecast-window percentile signal derived from authentic GloFAS discharge. It is not an official Bangladesh flood-warning threshold.','forecast_horizon_days':15,'ensemble_enabled':any(any(x.get('ensemble') for x in (GLOFAS_CACHE.get('payload') or {}).get('stations',{}).get(k,[])) for k in STATIONS),'historical_replay':'AVAILABLE_ON_DEMAND','verification':'GloFAS forecast vs GloFAS historical modelled discharge; not independent gauge validation','synthetic_fallback':False})
+    return jsonify({'ok':True,'architecture':'General Mode + Research Mode · GloFAS-only','source':source_status(),'zones':len(zones),'live_zones':sum(z['live'] for z in zones),'risk_definition':'Forecast-window percentile signal derived from authentic GloFAS discharge. It is not an official Bangladesh flood-warning threshold.','forecast_horizon_days':15,'ensemble_enabled':True,'historical_replay':'AVAILABLE_ON_DEMAND','verification':'GloFAS forecast vs GloFAS historical modelled discharge; not independent gauge validation','synthetic_fallback':False})
 
 @app.get('/api/research/glofas/<station_id>')
 def research_glofas(station_id):
     if station_id not in STATIONS:return jsonify({'ok':False,'error':'Unknown station'}),404
-    try:return jsonify(fetch_glofas_forecast(STATIONS,station_id,force=request.args.get('force')=='1'))
+    try:
+        control=fetch_glofas_forecast(STATIONS,station_id,force=request.args.get('force')=='1')
+        # Ensemble is deliberately station-scoped: downloading the full
+        # Bangladesh ensemble during dashboard boot can exceed small Render RAM.
+        ensemble=fetch_ensemble_forecast(STATIONS[station_id],lead_days=min(15,FORECAST_DAYS))
+        # Keep the original frontend contract: `forecast` is the ensemble
+        # evidence table; the smaller control forecast remains available under
+        # `control.forecast` for provenance/research use.
+        return jsonify({'ok':True,'station':station_id,'forecast':ensemble.get('forecast',[]),
+                        'issue_date':ensemble.get('issue_date') or control.get('issue_date'),
+                        'source':ensemble.get('source'),'control':control,'ensemble':ensemble})
     except Exception as exc:return jsonify({'ok':False,'station':station_id,'source':'Copernicus CEMS / GloFAS','error':str(exc)}),502
 
 @app.post('/api/research/replay')

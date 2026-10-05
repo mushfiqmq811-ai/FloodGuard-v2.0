@@ -100,9 +100,13 @@ def _candidate_issue_dates():
     return [today - timedelta(days=i) for i in range(lookback + 1)]
 
 
-def _request_file(issue_date: date, product_type="ensemble_perturbed_forecasts"):
+def _request_file(issue_date: date, product_type="control_forecast", bbox=None, lead_days=None):
     fd, path = tempfile.mkstemp(suffix=".nc")
     os.close(fd)
+    if bbox is None:
+        bbox = BBOX
+    if lead_days is None:
+        lead_days = FORECAST_DAYS
     request = {
         "system_version": SYSTEM_VERSION,
         "hydrological_model": HYDRO_MODEL,
@@ -111,8 +115,8 @@ def _request_file(issue_date: date, product_type="ensemble_perturbed_forecasts")
         "year": issue_date.strftime("%Y"),
         "month": issue_date.strftime("%m"),
         "day": issue_date.strftime("%d"),
-        "leadtime_hour": _lead_hours(),
-        "area": BBOX,
+        "leadtime_hour": [str(h) for h in range(24, (lead_days + 1) * 24, 24)],
+        "area": bbox,
         "data_format": "netcdf",
         "download_format": "unarchived",
     }
@@ -261,6 +265,43 @@ def fetch_all(stations, force=False):
             return cached
         raise RuntimeError(_cache["error"])
 
+
+def fetch_ensemble_forecast(station, lead_days=FORECAST_DAYS):
+    """Fetch genuine ensemble evidence for one station only.
+
+    The production dashboard uses the much smaller control forecast. Research
+    mode can request ensemble percentiles for one selected station, avoiding a
+    memory-heavy Bangladesh-wide ensemble download on small Render instances.
+    """
+    pad = float(os.getenv("GLOFAS_ENSEMBLE_PAD_DEG", "0.10"))
+    bbox = [station["lat"] + pad, station["lon"] - pad, station["lat"] - pad, station["lon"] + pad]
+    path = None
+    issue_date = None
+    last_error = None
+    for candidate in _candidate_issue_dates():
+        try:
+            path = _request_file(candidate, product_type="ensemble_perturbed_forecasts", bbox=bbox, lead_days=lead_days)
+            ds = xr.open_dataset(path)
+            try:
+                series = _series_for(ds, station)
+            finally:
+                ds.close()
+            if series:
+                issue_date = candidate
+                return {"ok": True, "issue_date": candidate.isoformat(), "forecast": series,
+                        "source": "Copernicus CEMS / GloFAS operational ensemble",
+                        "dataset": DATASET, "variable": VARIABLE, "unit": "m3/s"}
+            last_error = f"{candidate.isoformat()}: no ensemble series returned"
+        except Exception as exc:
+            last_error = f"{candidate.isoformat()}: {exc}"
+        finally:
+            if path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            path = None
+    raise RuntimeError(last_error or "No GloFAS ensemble issue date could be fetched")
 
 def fetch_glofas_forecast(stations, station_id, force=False):
     if station_id not in stations:
