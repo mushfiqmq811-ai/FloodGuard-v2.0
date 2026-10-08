@@ -1,7 +1,0 @@
-Flask==3.1.2
-requests==2.32.5
-Werkzeug==3.1.3
-gunicorn==23.0.0
-numpy==2.2.6
-pandas==2.3.2
-pywebpush==2.0.3

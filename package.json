@@ -1,0 +1,26 @@
+{
+  "name": "floodguard-bd",
+  "version": "2.0.0",
+  "description": "Bangladesh flood monitoring, risk insights, maps and 15-day projections.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "start": "tsx server.ts"
+  },
+  "dependencies": {
+    "@google/genai": "latest",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.8",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

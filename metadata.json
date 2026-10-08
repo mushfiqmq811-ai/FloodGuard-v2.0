@@ -1,0 +1,8 @@
+{
+  "name": "FloodGuard BD",
+  "description": "Bangladesh flood monitoring, risk insights, maps and 15-day projections.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
