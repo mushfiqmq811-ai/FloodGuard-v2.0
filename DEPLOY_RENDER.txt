@@ -1,4 +1,4 @@
-FLOODGUARD BD — GLOFAS-ONLY / RENDER FREE
+FLOODGUARD BD — OFFLINE GLOFAS DATA BUILD / RENDER
 
 BUILD
 -----
@@ -11,44 +11,47 @@ gunicorn --workers 1 --threads 1 --timeout 120 --bind 0.0.0.0:$PORT app:app
 REQUIRED ENVIRONMENT
 --------------------
 SECRET_KEY=<long random value>
-CDS_API_KEY=<your Copernicus EWDS/CDS API key>
 
 OPTIONAL
 --------
-GEMINI_API_KEY=<optional; grounded local Copilot fallback exists>
-EMAIL_SCRIPT_URL=<recommended HTTP email webhook for Render Free>
+GEMINI_API_KEY=<optional Copilot provider key>
+EMAIL_SCRIPT_URL=<optional HTTP email webhook>
 VAPID_PUBLIC_KEY=<optional browser push>
 VAPID_PRIVATE_KEY=<optional browser push>
-VAPID_CLAIMS_EMAIL=<mailto: address used for VAPID claims>
+VAPID_CLAIMS_EMAIL=<mailto address used for VAPID claims>
 ENABLE_BACKGROUND_ALERTS=false
-GLOFAS_CACHE_SECONDS=1800
-GLOFAS_ISSUE_LOOKBACK_DAYS=3
-GLOFAS_FORECAST_DAYS=15
 
-DATA SOURCE
+DATA
+----
+The website does NOT call Copernicus/GloFAS at runtime.
+Add Gemini's processed dataset:
+    data/glofas_processed.csv
+
+The CSV contract is documented in DATASET_SCHEMA.md.
+
+MODEL
+-----
+Optional but recommended before competition deployment:
+    pip install -r requirements-train.txt
+    python scripts/train_model.py
+
+This creates:
+    models/floodguard_model.joblib
+
+Without the model file, the website uses a clearly labelled transparent persistence/trend baseline derived only from the local GloFAS archive. It must not be described as ML.
+
+SOURCE / SCIENTIFIC DEFINITIONS
+-------------------------------
+GloFAS historical data is gridded modelled hydrology, not a Bangladesh gauge observation. The main variable is average river discharge in m³/s.
+
+The six FloodGuard zones are GloFAS target coordinates / nearest valid river-grid cells, not gauge stations.
+
+FloodGuard's risk signal is a historical percentile position, not an official flood probability and not a Bangladesh government warning threshold.
+
+RAW DATA
+--------
+Do not commit large raw NetCDF/GRIB archives to the web repository. Keep them archived separately. Commit the compact processed six-zone CSV and provenance report.
+
+RENDER NOTE
 -----------
-Copernicus CEMS / GloFAS via EWDS API: https://ewds.climate.copernicus.eu/api
-Forecast dataset: cems-glofas-forecast
-Forecast variable: river_discharge_in_the_last_24_hours
-Operational hydrological model: LISFLOOD / GloFAS v4.0
-
-AUTHENTIC-DATA GUARANTEE
-------------------------
-The hydrological runtime path has NO synthetic fallback and NO BWDB dependency. If EWDS data cannot be fetched, the UI stays unavailable/stale rather than inventing values.
-
-MONITORING
-----------
-Six target regions are used to reduce EWDS payload size on Render Free while keeping representative geographic coverage: Sylhet, Kurigram, Sirajganj, Rajshahi, Faridpur and Feni. These are GloFAS target locations, not gauge stations.
-
-SCIENTIFIC DEFINITION
----------------------
-GloFAS supplies forecast river discharge (m³/s), not Bangladesh gauge water level. The public signal is a percentile position inside each zone's 15-day forecast window, not a flood probability or official warning threshold.
-
-RESEARCH / VERIFICATION
-------------------------
-Research ensemble is selected-zone and on-demand. Historical verification uses the operational GloFAS historical V4 product and compares it with an operational forecast replay. This is model-vs-model verification, not independent gauge truth.
-
-RENDER FREE NOTE
-----------------
-Render Free has 0.1 CPU / 512 MB RAM, 15-minute idle spin-down, ephemeral filesystem, and no outbound SMTP ports 25/465/587. citeturn0search0turn0search1
-The app therefore does not rely on a permanent local cache, startup downloads, SMTP, or a continuously running alert scheduler. EMAIL_SCRIPT_URL is the supported email route.
+The runtime is deliberately API-independent so a third-party data outage does not break the hydrological layer. Render's ephemeral filesystem means the committed dataset is the durable source for the deployed app.

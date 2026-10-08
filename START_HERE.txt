@@ -1,14 +1,12 @@
-FLOODGUARD BD — GLOFAS-ONLY
+FLOODGUARD BD — OFFLINE DATA BUILD
 
-1. Upload this ZIP to your Git repository / Render service.
-2. Set the required Render environment variables from DEPLOY_RENDER.txt, especially:
-   - SECRET_KEY
-   - CDS_API_KEY
-3. Deploy with the Render configuration already included in render.yaml.
-4. Open the dashboard. It will request the newest available operational GloFAS issue date automatically.
-5. General Mode contains the public monitoring workflow.
-6. Research Mode contains provenance, ensemble evidence, replay and verification.
-7. If the newest GloFAS daily issue has not published yet, FloodGuard automatically tries recent prior issue dates. If a real snapshot already exists, it can be served from the authentic local cache rather than fabricated data.
+1. Put Gemini's processed file at data/glofas_processed.csv.
+2. Check data/DATA_QUALITY_REPORT.md and data/glofas_manifest.json.
+3. Install runtime deps: pip install -r requirements.txt
+4. Optional model training: pip install -r requirements-train.txt
+5. Train: python scripts/train_model.py
+6. Run: python app.py
 
-IMPORTANT:
-GloFAS provides forecast river discharge (m³/s), not Bangladesh gauge water level. FloodGuard's percentile signal is not an official Bangladesh flood-warning threshold.
+No GloFAS API key is needed by the website.
+No raw NetCDF/GRIB files are required at runtime.
+See GEMINI_DATA_PROCESSING_PROMPT.md for the exact processing prompt.

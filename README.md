@@ -1,30 +1,33 @@
-# FloodGuard BD — GloFAS-only production build
+# FloodGuard BD — Offline GloFAS historical production build
 
-FloodGuard BD keeps the existing UI and uses **Copernicus CEMS / GloFAS** as its only operational hydrological source. BWDB scraping, synthetic hydrological fallback and fake observed water levels are not part of the production data path.
+FloodGuard BD preserves the existing UI and uses a **locally processed Copernicus CEMS / GloFAS historical archive** as its hydrological data foundation. The deployed website does not call the GloFAS API at runtime.
 
-## Operational data
-- Dataset: `cems-glofas-forecast`
-- Variable: `river_discharge_in_the_last_24_hours`
+## Data
+- Dataset: `cems-glofas-historical`
+- Current source version: GloFAS v5.0
+- Hydrological model: LISFLOOD
+- Product: consolidated historical data
+- Variable: average river discharge in the last 24 hours
 - Unit: m³/s
-- Operational model: LISFLOOD / GloFAS v4.0 operational forecast
-- Forecast horizon: 15 days
-- Monitoring coverage: 6 selected Bangladesh target regions
-- Target coordinates are locations; the backend resolves the nearest finite GloFAS river-discharge grid cell in the returned data. They are **not Bangladesh gauge stations**.
-- Ensemble evidence: P10 / P50 / P90 is fetched on demand for the selected Research zone.
-- Issue-date fallback: newest available daily issue, then up to three prior UTC dates when publication lags.
+- Temporal resolution: daily
+- Runtime file: `data/glofas_processed.csv`
+- Six target zones: Sylhet, Kurigram, Sirajganj, Rajshahi, Faridpur, Feni
+- Target coordinates identify GloFAS model locations / nearest valid river-grid cells; they are not Bangladesh gauge stations.
 
 ## General Mode
 The existing public UI remains intact and includes current situation, selected-zone forecast, Bangladesh map, 15-day outlook, analytics, hazards, simulation, alerts and Copilot.
 
 ## Research Mode
-Research exposes provenance, ensemble P10/P50/P90 evidence, operational forecast replay by issue date, and forecast-vs-historical GloFAS verification. Verification is explicitly **model-vs-model**, not independent gauge validation.
+Research exposes provenance, local uncertainty evidence, historical replay and forecast-vs-historical modelled-data verification. Verification is explicitly **model-vs-model**, not independent gauge validation.
 
 ## Signal definition
-FloodGuard does not invent a Bangladesh danger-stage threshold from discharge. Its public high-flow signal is a transparent percentile position inside the selected zone's loaded 15-day GloFAS forecast window. It is not a flood probability and not an official Bangladesh warning.
+FloodGuard does not invent a Bangladesh danger-stage threshold from discharge. Its high-flow signal is a transparent historical percentile position and is not a flood probability or an official Bangladesh warning.
 
-## Render Free architecture
-Render Free provides 0.1 CPU and 512 MB RAM, spins down after inactivity, loses local filesystem state on restart/spin-down, and blocks outbound SMTP ports 25/465/587. citeturn0search0turn0search1
+## Offline workflow
+1. Download GloFAS historical source files from Copernicus EWDS.
+2. Process them with `GEMINI_DATA_PROCESSING_PROMPT.md`.
+3. Put the resulting `data/glofas_processed.csv` into this repository.
+4. Train the optional local Random Forest with `scripts/train_model.py`.
+5. Deploy the website. No GloFAS API key is needed at runtime.
 
-Therefore this build uses one Gunicorn worker/thread, demand-driven GloFAS refresh, compact geographic coverage, no startup download, best-effort local cache, and HTTP email webhook delivery through `EMAIL_SCRIPT_URL`. Background alert looping is off by default; a successful GloFAS refresh can dispatch configured alerts while the service is awake.
-
-Required Render secret: `CDS_API_KEY`. Gemini is optional. Browser push requires VAPID credentials.
+See `DATASET_SCHEMA.md`, `OFFLINE_DATA_WORKFLOW.md`, and `GEMINI_DATA_PROCESSING_PROMPT.md`.

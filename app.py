@@ -9,7 +9,7 @@ DB_PATH = os.path.join(BASE, 'floodguard.db')
 app = Flask(__name__, template_folder='.', static_folder='static')
 app.secret_key = os.environ.get('SECRET_KEY', 'floodguard-dev-secret-change-me')
 
-# Operational data source: Copernicus CEMS / GloFAS only. No synthetic fallback.
+# Runtime data source: offline processed Copernicus CEMS / GloFAS historical archive. No external hydrological API and no synthetic hydrological fallback.
 
 # Representative GloFAS grid zones. Coordinates identify the nearest GloFAS river-grid cell; they are not Bangladesh gauge stations.
 STATIONS = {
@@ -243,19 +243,19 @@ def package_station(key, force=False):
     forecast=[]
     for x in series[:15]:
         rr,pp=risk_for_discharge(series,x.get('discharge_m3s'))
-        forecast.append({'date':((datetime.fromisoformat((GLOFAS_CACHE.get('payload') or {}).get('issue_date')) if (GLOFAS_CACHE.get('payload') or {}).get('issue_date') else datetime.now(timezone.utc)) + timedelta(days=int(x['lead_day']))).strftime('%Y-%m-%d'),'level':round(float(x['discharge_m3s']),1),'discharge_m3s':round(float(x['discharge_m3s']),1),'probability':pp,'risk':rr,'uncertainty':round((float(x['p90_m3s'])-float(x['p10_m3s']))/2,1) if x.get('p90_m3s') is not None else None,'source':'GloFAS operational forecast'})
-    status=('CACHED GLOFAS' if (GLOFAS_CACHE.get('payload') or {}).get('stale') else 'LIVE GLOFAS') if current is not None else 'CONNECTING TO GLOFAS'
+        forecast.append({'date':((datetime.fromisoformat((GLOFAS_CACHE.get('payload') or {}).get('issue_date')) if (GLOFAS_CACHE.get('payload') or {}).get('issue_date') else datetime.now(timezone.utc)) + timedelta(days=int(x['lead_day']))).strftime('%Y-%m-%d'),'level':round(float(x['discharge_m3s']),1),'discharge_m3s':round(float(x['discharge_m3s']),1),'probability':pp,'risk':rr,'uncertainty':round((float(x['p90_m3s'])-float(x['p10_m3s']))/2,1) if x.get('p90_m3s') is not None else None,'source':'FloodGuard local GloFAS model'})
+    status='LOCAL GLOFAS DATASET' if current is not None else 'DATASET NOT LOADED'
     return {'id':key,'name':st['name'],'district':st['district'],'division':st['division'],'river':st['river'],'station':st['station'],
             'current':round(float(current),1) if current is not None else None,'predicted':forecast[0]['level'] if forecast else None,'probability':None,'signal_position':prob,
             'risk':risk,'danger':None,'reference':None,'lat':st['lat'],'lon':st['lon'],'trend_3h_cm':trend,'trend_m3s':trend,
-            'live':current is not None,'simulation':False,'snapshot':False,'status':status,'source':'Copernicus CEMS / GloFAS','source_url':'https://ewds.climate.copernicus.eu/datasets/cems-glofas-forecast',
+            'live':current is not None,'simulation':False,'snapshot':False,'status':status,'source':'Offline GloFAS historical archive','source_url':'https://ewds.climate.copernicus.eu/datasets/cems-glofas-historical',
             'observed_at':None,'fetched_at':(GLOFAS_CACHE.get('payload') or {}).get('fetched_at'),'issue_date':(GLOFAS_CACHE.get('payload') or {}).get('issue_date'),'stale':bool((GLOFAS_CACHE.get('payload') or {}).get('stale')),'forecast15':forecast,'day15':forecast[-1]['level'] if forecast else None,'day15risk':forecast[-1]['risk'] if forecast else 'UNAVAILABLE',
-            'history_points':0,'model_ready':True,'unit':'m3/s',"signal_type":"Relative position within this issue date's GloFAS forecast window; not flood probability"}
+            'history_points':0,'model_ready':bool(source_status().get('model_available')),'unit':'m3/s',"signal_type":"Relative position within this issue date's GloFAS forecast window; not flood probability"}
 
 def build_dashboard(key):
     if key not in STATIONS:key='sylhet'
     z=package_station(key)
-    return {'station':z,'current':z['current'],'predicted':z['predicted'],'probability':z['probability'],'risk':z['risk'],'trend_per_3h':z['trend_m3s'],'forecast15':z['forecast15'],'history':[],'advice':advice(z['risk']),'simple':make_simple_summary(z),'live_connected':z['live'],'model':{'ready':True,'model_name':'Copernicus GloFAS / LISFLOOD operational ensemble'}}
+    return {'station':z,'current':z['current'],'predicted':z['predicted'],'probability':z['probability'],'risk':z['risk'],'trend_per_3h':z['trend_m3s'],'forecast15':z['forecast15'],'history':[],'advice':advice(z['risk']),'simple':make_simple_summary(z),'live_connected':z['live'],'model':{'ready':bool(source_status().get('model_available')),'model_name':'FloodGuard Random Forest (offline)' if source_status().get('model_available') else 'Transparent persistence/trend baseline (offline)'}}
 
 def advice(risk):
     if risk=='UNAVAILABLE': return ['GloFAS forecast data is currently unavailable for this zone.','FloodGuard will not substitute simulated values.','Follow official Bangladesh flood authorities for decisions.']
@@ -275,36 +275,13 @@ def healthz():
     payload=GLOFAS_CACHE.get('payload')
     return jsonify({'ok':True,'service':'FloodGuard BD','glofas_connected':bool(payload),'glofas_issue_date':payload.get('issue_date') if payload else None,'glofas_fetched_at':payload.get('fetched_at') if payload else None,'background_alerts':bool(_ALERT_THREAD_STARTED)})
 
-PAGE_ROUTES = {
-    '/': 'dashboard',
-    '/monitor': 'zones',
-    '/zones': 'zones',
-    '/map': 'maps',
-    '/forecast': 'forecast',
-    '/analytics': 'analytics',
-    '/research': 'research',
-    '/how-it-works': 'about',
-    '/hazards': 'hazards',
-    '/simulation': 'simulation',
-    '/alerts': 'account',
-}
-
-def _serve_app_page(page='dashboard'):
-    root_index = os.path.join(BASE, 'index.html')
-    if os.path.exists(root_index):
-        response = send_file(root_index)
-        response.headers['X-FloodGuard-Page'] = page
-        return response
-    return render_template('index.html')
-
 @app.route('/')
 def index():
-    return _serve_app_page('dashboard')
-
-for _route, _page in PAGE_ROUTES.items():
-    if _route == '/':
-        continue
-    app.add_url_rule(_route, endpoint='page_' + _page + _route.replace('/', '_').replace('-', '_'), view_func=lambda page=_page: _serve_app_page(page), methods=['GET'])
+    # Serve the root index.html directly so deployment does not depend on templates/ being uploaded.
+    root_index = os.path.join(BASE, 'index.html')
+    if os.path.exists(root_index):
+        return send_file(root_index)
+    return render_template('index.html')
 @app.route('/api/zones')
 def zones(): return jsonify([package_station(k) for k in STATIONS])
 @app.route('/api/dashboard')
@@ -320,7 +297,7 @@ def live_refresh():
     return jsonify({'started':started,'state':'fetching' if _GLOFAS_FETCHING else ('ready' if snap else 'idle'),'connected':bool(snap),'fetched_at':snap.get('fetched_at') if snap else None,'error':GLOFAS_CACHE.get('error')})
 @app.route('/api/live-status')
 def live_status():
-    snap=GLOFAS_CACHE.get('payload'); return jsonify({'connected':bool(snap),'state':'fetching' if _GLOFAS_FETCHING else ('ready' if snap else ('error' if GLOFAS_CACHE.get('error') else 'idle')),'source':'Copernicus CEMS / GloFAS','fetched_at':snap.get('fetched_at') if snap else None,'issue_date':snap.get('issue_date') if snap else None,'error':GLOFAS_CACHE.get('error')})
+    snap=GLOFAS_CACHE.get('payload'); return jsonify({'connected':bool(snap),'state':'fetching' if _GLOFAS_FETCHING else ('ready' if snap else ('error' if GLOFAS_CACHE.get('error') else 'idle')),'source':'Offline GloFAS historical archive','fetched_at':snap.get('fetched_at') if snap else None,'issue_date':snap.get('issue_date') if snap else None,'error':GLOFAS_CACHE.get('error')})
 @app.get('/api/glofas/diagnostics')
 def glofas_diagnostics():
     snap=GLOFAS_CACHE.get('payload') or {}
@@ -337,7 +314,9 @@ def analytics():
     return jsonify({'counts':{r:sum(z['risk']==r for z in zones) for r in ['NORMAL','WARNING','FLOOD','SEVERE']},'avg_discharge_m3s':round(statistics.mean(z['current'] for z in valid),1) if valid else None,'rising':rising[:6],'highest_signal':sorted(valid,key=lambda z:z.get('signal_position') or 0,reverse=True)[:6]})
 
 @app.get('/api/model-status')
-def api_model_status(): return jsonify({'ready':True,'model_name':'Copernicus GloFAS / LISFLOOD operational ensemble','training_source':'ECMWF meteorological ensemble + LISFLOOD hydrological model','synthetic_data_used':False,'note':'FloodGuard uses GloFAS discharge forecasts. Relative signal bands are descriptive within the selected forecast window and are not flood probabilities or official Bangladesh warning thresholds.'})
+def api_model_status():
+    st=source_status(); ready=bool(st.get('model_available'))
+    return jsonify({'ready':ready,'model_name':'FloodGuard Random Forest (offline)' if ready else 'Transparent persistence/trend baseline (offline)','training_source':'Processed GloFAS historical modelled discharge','synthetic_data_used':False,'note':'Risk bands are historical percentile signals, not flood probabilities or official Bangladesh warning thresholds.'})
 
 @app.get('/api/data-provenance')
 def data_provenance(): return jsonify(source_status())
@@ -345,7 +324,7 @@ def data_provenance(): return jsonify(source_status())
 @app.get('/api/research/summary')
 def research_summary():
     zones=[package_station(k) for k in STATIONS]
-    return jsonify({'ok':True,'architecture':'General Mode + Research Mode · GloFAS-only','source':source_status(),'zones':len(zones),'live_zones':sum(z['live'] for z in zones),"risk_definition":"Relative position within the selected issue date's GloFAS forecast window. It is descriptive, not a flood probability and not an official Bangladesh warning threshold.",'forecast_horizon_days':15,'ensemble_enabled':any(v.get('state')=='ready' for k,v in _RESEARCH_JOBS.items() if k.startswith('ensemble:')),'historical_replay':'AVAILABLE_ON_DEMAND','verification':'GloFAS forecast vs GloFAS historical modelled discharge; not independent gauge validation','synthetic_fallback':False})
+    return jsonify({'ok':True,'architecture':'General Mode + Research Mode · Offline GloFAS historical archive','source':source_status(),'zones':len(zones),'live_zones':sum(z['live'] for z in zones),"risk_definition":"Relative position within the selected issue date's GloFAS forecast window. It is descriptive, not a flood probability and not an official Bangladesh warning threshold.",'forecast_horizon_days':15,'ensemble_enabled':False,'historical_replay':'AVAILABLE_ON_DEMAND','verification':'Local historical replay vs held-out local GloFAS modelled discharge; not independent gauge validation','synthetic_fallback':False})
 
 
 # Research-mode jobs are asynchronous so a slow EWDS queue never blocks a Render Free HTTP worker.
@@ -390,7 +369,7 @@ def research_glofas(station_id):
         if cached and cached.get('state')=='running':
             return jsonify(_research_job_response(job_id))
     _start_research_job(job_id, lambda: fetch_station_ensemble(STATIONS[station_id],force=force))
-    return jsonify({'ok':False,'state':'fetching','job_id':job_id,'station':station_id,'source':'Copernicus CEMS / GloFAS operational ensemble'})
+    return jsonify({'ok':False,'state':'fetching','job_id':job_id,'station':station_id,'source':'Local GloFAS historical archive'})
 
 @app.get('/api/research/job/<path:job_id>')
 def research_job(job_id):
@@ -407,7 +386,7 @@ def _verification_result(station_id, issue_date):
     if not pairs: raise RuntimeError('Historical GloFAS target values were not returned for the replay window.')
     errors=[a-b for _,a,b,_ in pairs]; mae=sum(abs(x) for x in errors)/len(errors); rmse=(sum(x*x for x in errors)/len(errors))**0.5; bias=sum(errors)/len(errors)
     ma=sum(a for _,a,_,_ in pairs)/len(pairs); mb=sum(b for _,_,b,_ in pairs)/len(pairs); cov=sum((a-ma)*(b-mb) for _,a,b,_ in pairs); va=sum((a-ma)**2 for _,a,_,_ in pairs); vb=sum((b-mb)**2 for _,_,b,_ in pairs); corr=cov/(va*vb)**0.5 if va>0 and vb>0 else None
-    return {'ok':True,'station':station_id,'issue_date':issue_date,'target':'GloFAS v4.0 historical modelled discharge (intermediate)' ,'independent_gauge_validation':False,'n':len(pairs),'mae_m3s':round(mae,2),'rmse_m3s':round(rmse,2),'bias_m3s':round(bias,2),'correlation':round(corr,3) if corr is not None else None,'rows':[{'lead_day':d,'date':dt,'forecast_m3s':round(a,2),'historical_m3s':round(b,2),'error_m3s':round(a-b,2)} for d,a,b,dt in pairs]}
+    return {'ok':True,'station':station_id,'issue_date':issue_date,'target':'GloFAS v5.0 historical modelled discharge (offline archive)' ,'independent_gauge_validation':False,'n':len(pairs),'mae_m3s':round(mae,2),'rmse_m3s':round(rmse,2),'bias_m3s':round(bias,2),'correlation':round(corr,3) if corr is not None else None,'rows':[{'lead_day':d,'date':dt,'forecast_m3s':round(a,2),'historical_m3s':round(b,2),'error_m3s':round(a-b,2)} for d,a,b,dt in pairs]}
 
 @app.post('/api/research/replay')
 def research_replay():
@@ -415,8 +394,13 @@ def research_replay():
     if station_id not in STATIONS or not issue_date:return jsonify({'ok':False,'error':'station_id and issue_date are required'}),400
     try: parsed_issue=datetime.fromisoformat(issue_date).date()
     except Exception:return jsonify({'ok':False,'error':'issue_date must be YYYY-MM-DD'}),400
-    if parsed_issue < date(2019,11,5) or parsed_issue > datetime.now(timezone.utc).date():
-        return jsonify({'ok':False,'error':'Operational GloFAS forecast replay supports issue dates from 2019-11-05 through today (UTC).'}),400
+    try:
+        meta=source_status(); dmin=meta.get('date_min'); dmax=meta.get('date_max')
+        if dmin and parsed_issue < date.fromisoformat(dmin):
+            return jsonify({'ok':False,'error':f'Issue date is earlier than the local archive start ({dmin}).'}),400
+        if dmax and parsed_issue > date.fromisoformat(dmax):
+            return jsonify({'ok':False,'error':f'Issue date is later than the local archive end ({dmax}).'}),400
+    except Exception: pass
     job_id=f"replay:{station_id}:{issue_date}"
     with _RESEARCH_JOBS_LOCK:
         cached=_RESEARCH_JOBS.get(job_id)
@@ -432,7 +416,7 @@ def research_verify():
     try: parsed_issue=datetime.fromisoformat(issue_date).date()
     except Exception:return jsonify({'ok':False,'error':'issue_date must be YYYY-MM-DD'}),400
     if parsed_issue < date(2019,11,5) or parsed_issue > datetime.now(timezone.utc).date():
-        return jsonify({'ok':False,'error':'Operational GloFAS forecast verification supports issue dates from 2019-11-05 through today (UTC).'}),400
+        return jsonify({'ok':False,'error':'Local GloFAS historical verification supports any issue date present in the processed archive.'}),400
     job_id=f"verify:{station_id}:{issue_date}"
     with _RESEARCH_JOBS_LOCK:
         cached=_RESEARCH_JOBS.get(job_id)
@@ -443,7 +427,7 @@ def research_verify():
 
 @app.get('/api/research/validation-status')
 def validation_status():
-    return jsonify({'status':'READY_FOR_MODELLED-TARGET VERIFICATION','synthetic_data_used':False,'real_observation_validation':'NOT_AVAILABLE_WITH_GLOFAS-ONLY INPUTS','available_verification':'Operational GloFAS forecast replay vs GloFAS v4.0 historical modelled discharge (intermediate)' ,'independent_ground_truth':False,'note':'This verification measures consistency against a GloFAS historical modelled target; it must not be presented as gauge-based flood-warning accuracy.'})
+    return jsonify({'status':'READY_FOR_MODELLED-TARGET VERIFICATION','synthetic_data_used':False,'real_observation_validation':'NOT_AVAILABLE_WITH_GLOFAS-ONLY INPUTS','available_verification':'Local model replay vs GloFAS v5.0 historical modelled discharge' ,'independent_ground_truth':False,'note':'This verification measures consistency against a GloFAS historical modelled target; it must not be presented as gauge-based flood-warning accuracy.'})
 
 @app.get('/api/glofas/<station_id>')
 def glofas_station(station_id):
